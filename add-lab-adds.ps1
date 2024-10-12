@@ -1,4 +1,4 @@
-# Script to install ADDS role and promote domain controllers using Azure CLI
+# Script to configure pagefile, install ADDS role, and promote domain controllers using Azure CLI
 
 # Set secure password
 $password = "YourSecurePassword123!"
@@ -23,6 +23,32 @@ function Run-AzVMCommand {
     
     Write-Host "Command executed successfully on $vmName"
 }
+
+# Function to configure pagefile and restart VM
+function Configure-PagefileAndRestart {
+    param (
+        [string]$resourceGroup,
+        [string]$vmName
+    )
+
+    $script = @"
+    # Configure pagefile to be automatically managed
+    $computerSystem = Get-WmiObject Win32_ComputerSystem -EnableAllPrivileges
+    $computerSystem.AutomaticManagedPagefile = $true
+    $computerSystem.Put()
+
+    # Restart the computer
+    Restart-Computer -Force
+"@
+
+    Run-AzVMCommand -resourceGroup $resourceGroup -vmName $vmName -script $script
+    
+    Write-Host "Waiting for $vmName to restart (5 minutes)..."
+    Start-Sleep -Seconds 300
+}
+
+# Configure pagefile and restart lon-dc1
+Configure-PagefileAndRestart -resourceGroup 'rg-lit-ADLab-ukw' -vmName 'lon-dc1'
 
 # Promote lon-dc1 as first DC in learnitlessons.com
 $script = @"
