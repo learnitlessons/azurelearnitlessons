@@ -3,7 +3,7 @@
 # Set secure password
 $password = "YourSecurePassword123!"
 
-# Function to run command on VM
+# Function to run command on VM and check for errors
 function Run-AzVMCommand {
     param (
         [string]$resourceGroup,
@@ -12,7 +12,16 @@ function Run-AzVMCommand {
     )
     
     $script = $script -replace '"', '\"'
-    az vm run-command invoke --command-id RunPowerShellScript --name $vmName -g $resourceGroup --scripts "$script"
+    $result = az vm run-command invoke --command-id RunPowerShellScript --name $vmName -g $resourceGroup --scripts "$script"
+    $output = $result | ConvertFrom-Json
+    
+    if ($output.value.message -match "Error") {
+        Write-Host "Error occurred while executing command on $vmName"
+        Write-Host $output.value.message
+        exit 1
+    }
+    
+    Write-Host "Command executed successfully on $vmName"
 }
 
 # Promote lon-dc1 as first DC in learnitlessons.com
@@ -24,8 +33,14 @@ Install-ADDSForest -CreateDnsDelegation:`$false -DatabasePath 'C:\Windows\NTDS' 
 "@
 Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-ukw' -vmName 'lon-dc1' -script $script
 
-Write-Host "Waiting for forest to be ready (5 minutes)..."
-Start-Sleep -Seconds 300
+Write-Host "Waiting for forest to be ready (10 minutes)..."
+Start-Sleep -Seconds 600
+
+# Configure DNS on lon-dc2
+$script = @"
+Set-DnsClientServerAddress -InterfaceAlias 'Ethernet' -ServerAddresses '10.0.0.4'
+"@
+Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-ukw' -vmName 'lon-dc2' -script $script
 
 # Promote lon-dc2 as additional DC in learnitlessons.com
 $script = @"
@@ -36,8 +51,14 @@ Install-ADDSDomainController -NoGlobalCatalog:`$false -CreateDnsDelegation:`$fal
 "@
 Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-ukw' -vmName 'lon-dc2' -script $script
 
-Write-Host "Waiting for replication (5 minutes)..."
-Start-Sleep -Seconds 300
+Write-Host "Waiting for replication (10 minutes)..."
+Start-Sleep -Seconds 600
+
+# Configure DNS on ams-dc1
+$script = @"
+Set-DnsClientServerAddress -InterfaceAlias 'Ethernet' -ServerAddresses '10.0.0.4','10.0.0.5'
+"@
+Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-weu' -vmName 'ams-dc1' -script $script
 
 # Promote ams-dc1 as first DC in ams.learnitlessons.com
 $script = @"
@@ -48,8 +69,14 @@ Install-ADDSDomain -NoGlobalCatalog:`$false -CreateDnsDelegation:`$true -Databas
 "@
 Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-weu' -vmName 'ams-dc1' -script $script
 
-Write-Host "Waiting for subdomain to be ready (5 minutes)..."
-Start-Sleep -Seconds 300
+Write-Host "Waiting for subdomain to be ready (10 minutes)..."
+Start-Sleep -Seconds 600
+
+# Configure DNS on ams-dc2
+$script = @"
+Set-DnsClientServerAddress -InterfaceAlias 'Ethernet' -ServerAddresses '10.1.0.4'
+"@
+Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-weu' -vmName 'ams-dc2' -script $script
 
 # Promote ams-dc2 as additional DC in ams.learnitlessons.com
 $script = @"
@@ -60,8 +87,14 @@ Install-ADDSDomainController -NoGlobalCatalog:`$false -CreateDnsDelegation:`$fal
 "@
 Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-weu' -vmName 'ams-dc2' -script $script
 
-Write-Host "Waiting for replication (5 minutes)..."
-Start-Sleep -Seconds 300
+Write-Host "Waiting for replication (10 minutes)..."
+Start-Sleep -Seconds 600
+
+# Configure DNS on mum-dc1
+$script = @"
+Set-DnsClientServerAddress -InterfaceAlias 'Ethernet' -ServerAddresses '10.0.0.4','10.0.0.5'
+"@
+Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-cin' -vmName 'mum-dc1' -script $script
 
 # Promote mum-dc1 as first DC in mum.learnitlessons.com
 $script = @"
@@ -72,8 +105,14 @@ Install-ADDSDomain -NoGlobalCatalog:`$false -CreateDnsDelegation:`$true -Databas
 "@
 Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-cin' -vmName 'mum-dc1' -script $script
 
-Write-Host "Waiting for subdomain to be ready (5 minutes)..."
-Start-Sleep -Seconds 300
+Write-Host "Waiting for subdomain to be ready (10 minutes)..."
+Start-Sleep -Seconds 600
+
+# Configure DNS on mum-dc2
+$script = @"
+Set-DnsClientServerAddress -InterfaceAlias 'Ethernet' -ServerAddresses '10.2.0.4'
+"@
+Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-cin' -vmName 'mum-dc2' -script $script
 
 # Promote mum-dc2 as additional DC in mum.learnitlessons.com
 $script = @"
