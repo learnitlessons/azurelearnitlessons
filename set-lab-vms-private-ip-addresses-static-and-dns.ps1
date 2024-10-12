@@ -1,9 +1,3 @@
-# Connect to Azure
-Connect-AzAccount
-
-# Set the correct subscription context
-Set-AzContext -Subscription "Your-Subscription-ID"
-
 # Configure lon-dc1
 $nic = Get-AzNetworkInterface -Name "lon-dc1-nic" -ResourceGroupName "rg-lit-ADLab-ukw"
 $nic.IpConfigurations[0].PrivateIpAddress = "10.0.0.4"
