@@ -19,37 +19,49 @@ function Create-RegionVMs {
 
     $vnet = New-AzVirtualNetwork -ResourceGroupName $resourceGroup -Location $location -Name "vnet-$location" -AddressPrefix $addressPrefix -Subnet (New-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix ($addressPrefix -replace '0/16', '0/24'))
 
-    # Create first VM
-    $vm = $vm1Name
-    $pip = New-AzPublicIpAddress -Name "$vm-pip" -ResourceGroupName $resourceGroup -Location $location -AllocationMethod Static -Sku Standard
-    $nic = New-AzNetworkInterface -Name "$vm-nic" -ResourceGroupName $resourceGroup -Location $location -SubnetId $vnet.Subnets[0].Id -PublicIpAddressId $pip.Id -PrivateIpAddress $vm1StaticIP
-    $nic.IpConfigurations[0].PrivateIpAllocationMethod = "Static"
-    Set-AzNetworkInterface -NetworkInterface $nic
-    $nsg = New-AzNetworkSecurityGroup -ResourceGroupName $resourceGroup -Location $location -Name "$vm-nsg" -SecurityRules (New-AzNetworkSecurityRuleConfig -Name "RDP" -Protocol Tcp -Direction Inbound -Priority 1000 -SourceAddressPrefix * -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 3389 -Access Allow)
-    $nic.NetworkSecurityGroup = $nsg
-    Set-AzNetworkInterface -NetworkInterface $nic
-    $vmConfig = New-AzVMConfig -VMName $vm -VMSize "Standard_B1s" | 
-        Set-AzVMOperatingSystem -Windows -ComputerName $vm -Credential (New-Object PSCredential($user, $securePass)) | 
-        Set-AzVMSourceImage -PublisherName "MicrosoftWindowsServer" -Offer "WindowsServer" -Skus "2022-datacenter-azure-edition" -Version "latest" | 
-        Add-AzVMNetworkInterface -Id $nic.Id | 
-        Set-AzVMBootDiagnostic -Disable
-    New-AzVM -ResourceGroupName $resourceGroup -Location $location -VM $vmConfig
+    # Function to create a VM with static IP and configure pagefile
+    function Create-VMWithStaticIP {
+        param (
+            [string]$vmName,
+            [string]$staticIP
+        )
 
-    # Create second VM
-    $vm = $vm2Name
-    $pip = New-AzPublicIpAddress -Name "$vm-pip" -ResourceGroupName $resourceGroup -Location $location -AllocationMethod Static -Sku Standard
-    $nic = New-AzNetworkInterface -Name "$vm-nic" -ResourceGroupName $resourceGroup -Location $location -SubnetId $vnet.Subnets[0].Id -PublicIpAddressId $pip.Id -PrivateIpAddress $vm2StaticIP
-    $nic.IpConfigurations[0].PrivateIpAllocationMethod = "Static"
-    Set-AzNetworkInterface -NetworkInterface $nic
-    $nsg = New-AzNetworkSecurityGroup -ResourceGroupName $resourceGroup -Location $location -Name "$vm-nsg" -SecurityRules (New-AzNetworkSecurityRuleConfig -Name "RDP" -Protocol Tcp -Direction Inbound -Priority 1000 -SourceAddressPrefix * -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 3389 -Access Allow)
-    $nic.NetworkSecurityGroup = $nsg
-    Set-AzNetworkInterface -NetworkInterface $nic
-    $vmConfig = New-AzVMConfig -VMName $vm -VMSize "Standard_B1s" | 
-        Set-AzVMOperatingSystem -Windows -ComputerName $vm -Credential (New-Object PSCredential($user, $securePass)) | 
-        Set-AzVMSourceImage -PublisherName "MicrosoftWindowsServer" -Offer "WindowsServer" -Skus "2022-datacenter-azure-edition" -Version "latest" | 
-        Add-AzVMNetworkInterface -Id $nic.Id | 
-        Set-AzVMBootDiagnostic -Disable
-    New-AzVM -ResourceGroupName $resourceGroup -Location $location -VM $vmConfig
+        $pip = New-AzPublicIpAddress -Name "$vmName-pip" -ResourceGroupName $resourceGroup -Location $location -AllocationMethod Static -Sku Standard
+        $nic = New-AzNetworkInterface -Name "$vmName-nic" -ResourceGroupName $resourceGroup -Location $location -SubnetId $vnet.Subnets[0].Id -PublicIpAddressId $pip.Id -PrivateIpAddress $staticIP
+        $nic.IpConfigurations[0].PrivateIpAllocationMethod = "Static"
+        Set-AzNetworkInterface -NetworkInterface $nic
+        $nsg = New-AzNetworkSecurityGroup -ResourceGroupName $resourceGroup -Location $location -Name "$vmName-nsg" -SecurityRules (New-AzNetworkSecurityRuleConfig -Name "RDP" -Protocol Tcp -Direction Inbound -Priority 1000 -SourceAddressPrefix * -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 3389 -Access Allow)
+        $nic.NetworkSecurityGroup = $nsg
+        Set-AzNetworkInterface -NetworkInterface $nic
+        $vmConfig = New-AzVMConfig -VMName $vmName -VMSize "Standard_B1s" | 
+            Set-AzVMOperatingSystem -Windows -ComputerName $vmName -Credential (New-Object PSCredential($user, $securePass)) | 
+            Set-AzVMSourceImage -PublisherName "MicrosoftWindowsServer" -Offer "WindowsServer" -Skus "2022-datacenter-azure-edition" -Version "latest" | 
+            Add-AzVMNetworkInterface -Id $nic.Id | 
+            Set-AzVMBootDiagnostic -Disable
+        New-AzVM -ResourceGroupName $resourceGroup -Location $location -VM $vmConfig
+
+        # Configure pagefile
+        $script = @"
+        `$computerSystem = Get-WmiObject -Class Win32_ComputerSystem -EnableAllPrivileges
+        if (`$computerSystem.AutomaticManagedPagefile) {
+            Write-Host "Pagefile is already automatically managed."
+        } else {
+            `$computerSystem.AutomaticManagedPagefile = `$true
+            `$result = `$computerSystem.Put()
+            if (`$result.ReturnValue -eq 0) {
+                Write-Host "Pagefile set to be automatically managed."
+            } else {
+                Write-Host "Failed to set pagefile to automatically managed. Return value: `$(`$result.ReturnValue)"
+            }
+        }
+        Restart-Computer -Force
+"@
+        Run-AzVMCommand -resourceGroup $resourceGroup -vmName $vmName -script $script
+    }
+
+    # Create VMs
+    Create-VMWithStaticIP -vmName $vm1Name -staticIP $vm1StaticIP
+    Create-VMWithStaticIP -vmName $vm2Name -staticIP $vm2StaticIP
 
     # Verify IP configurations
     Write-Host "Verifying IP configurations for $($vm1Name) and $($vm2Name):"
@@ -94,39 +106,6 @@ function Run-AzVMCommand {
     Write-Host "Command executed successfully on $vmName"
 }
 
-# Function to configure pagefile and restart VM
-function Configure-PagefileAndRestart {
-    param (
-        [string]$resourceGroup,
-        [string]$vmName
-    )
-
-    $script = @"
-    # Configure pagefile to be automatically managed
-    `$computerSystem = Get-WmiObject -Class Win32_ComputerSystem -EnableAllPrivileges
-    if (`$computerSystem.AutomaticManagedPagefile) {
-        Write-Host "Pagefile is already automatically managed."
-    } else {
-        `$computerSystem.AutomaticManagedPagefile = `$true
-        `$result = `$computerSystem.Put()
-        if (`$result.ReturnValue -eq 0) {
-            Write-Host "Pagefile set to be automatically managed."
-        } else {
-            Write-Host "Failed to set pagefile to automatically managed. Return value: `$(`$result.ReturnValue)"
-        }
-    }
-
-    # Restart the computer
-    Write-Host "Restarting the computer..."
-    Restart-Computer -Force
-"@
-
-    Run-AzVMCommand -resourceGroup $resourceGroup -vmName $vmName -script $script
-    
-    Write-Host "Waiting for $vmName to restart (5 minutes)..."
-    Start-Sleep -Seconds 300
-}
-
 # Function to install ADDS role and promote DC
 function Install-ADDSAndPromoteDC {
     param (
@@ -137,9 +116,6 @@ function Install-ADDSAndPromoteDC {
         [bool]$isFirstDC,
         [string]$netbiosName
     )
-
-    # Configure pagefile and restart
-    Configure-PagefileAndRestart -resourceGroup $resourceGroup -vmName $vmName
 
     # Install ADDS role
     $script = "Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools"
@@ -176,10 +152,9 @@ function Install-ADDSAndPromoteDC {
     }
 
     Run-AzVMCommand -resourceGroup $resourceGroup -vmName $vmName -script $script
-
-    Write-Host "Waiting for promotion to complete and DC to restart (10 minutes)..."
-    Start-Sleep -Seconds 600
 }
+
+# ... [The rest of the script, including $regions definition and main menu, remains unchanged] ...
 
 # Main script
 $regions = @(
