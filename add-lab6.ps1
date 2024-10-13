@@ -1,3 +1,5 @@
+# Azure AD Multi-Region Deployment Script
+
 # Basic settings
 $user = "shumi"
 $pass = "YourSecurePassword123!" # Replace with a secure password
@@ -15,17 +17,9 @@ function Create-RegionVMs {
         [string]$vm2StaticIP
     )
 
-    # Check if resource group exists, if not create it
-    $rg = Get-AzResourceGroup -Name $resourceGroup -ErrorAction SilentlyContinue
-    if (-not $rg) {
-        New-AzResourceGroup -Name $resourceGroup -Location $location
-    }
+    New-AzResourceGroup -Name $resourceGroup -Location $location -ErrorAction SilentlyContinue
 
-    # Check if VNet exists, if not create it
-    $vnet = Get-AzVirtualNetwork -Name "vnet-$location" -ResourceGroupName $resourceGroup -ErrorAction SilentlyContinue
-    if (-not $vnet) {
-        $vnet = New-AzVirtualNetwork -ResourceGroupName $resourceGroup -Location $location -Name "vnet-$location" -AddressPrefix $addressPrefix -Subnet (New-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix ($addressPrefix -replace '0/16', '0/24'))
-    }
+    $vnet = New-AzVirtualNetwork -ResourceGroupName $resourceGroup -Location $location -Name "vnet-$location" -AddressPrefix $addressPrefix -Subnet (New-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix ($addressPrefix -replace '0/16', '0/24'))
 
     # Function to create a VM with static IP and configure pagefile
     function Create-VMWithStaticIP {
@@ -34,34 +28,18 @@ function Create-RegionVMs {
             [string]$staticIP
         )
 
-        # Check if VM already exists
-        $existingVM = Get-AzVM -ResourceGroupName $resourceGroup -Name $vmName -ErrorAction SilentlyContinue
-        if ($existingVM) {
-            Write-Host "VM $vmName already exists. Skipping creation."
-            return
-        }
-
-        # Create Public IP
         $pip = New-AzPublicIpAddress -Name "$vmName-pip" -ResourceGroupName $resourceGroup -Location $location -AllocationMethod Static -Sku Standard
-
-        # Create Network Interface
         $nic = New-AzNetworkInterface -Name "$vmName-nic" -ResourceGroupName $resourceGroup -Location $location -SubnetId $vnet.Subnets[0].Id -PublicIpAddressId $pip.Id -PrivateIpAddress $staticIP
         $nic.IpConfigurations[0].PrivateIpAllocationMethod = "Static"
         Set-AzNetworkInterface -NetworkInterface $nic
-
-        # Create Network Security Group
-        $nsgRuleRDP = New-AzNetworkSecurityRuleConfig -Name "RDP" -Protocol Tcp -Direction Inbound -Priority 1000 -SourceAddressPrefix * -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 3389 -Access Allow
-        $nsg = New-AzNetworkSecurityGroup -ResourceGroupName $resourceGroup -Location $location -Name "$vmName-nsg" -SecurityRules $nsgRuleRDP
+        $nsg = New-AzNetworkSecurityGroup -ResourceGroupName $resourceGroup -Location $location -Name "$vmName-nsg" -SecurityRules (New-AzNetworkSecurityRuleConfig -Name "RDP" -Protocol Tcp -Direction Inbound -Priority 1000 -SourceAddressPrefix * -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 3389 -Access Allow)
         $nic.NetworkSecurityGroup = $nsg
         Set-AzNetworkInterface -NetworkInterface $nic
-
-        # Create VM
-        $vmConfig = New-AzVMConfig -VMName $vmName -VMSize "Standard_B1s" | 
+        $vmConfig = New-AzVMConfig -VMName $vmName -VMSize "Standard_B2s" | 
             Set-AzVMOperatingSystem -Windows -ComputerName $vmName -Credential (New-Object PSCredential($user, $securePass)) | 
             Set-AzVMSourceImage -PublisherName "MicrosoftWindowsServer" -Offer "WindowsServer" -Skus "2022-datacenter-azure-edition" -Version "latest" | 
             Add-AzVMNetworkInterface -Id $nic.Id | 
             Set-AzVMBootDiagnostic -Disable
-
         New-AzVM -ResourceGroupName $resourceGroup -Location $location -VM $vmConfig
 
         # Configure pagefile
@@ -84,24 +62,13 @@ function Create-RegionVMs {
     }
 
     # Create VMs
-    $createVM1 = Read-Host "Create $vm1Name? (Y/N)"
-    if ($createVM1 -eq "Y") {
-        Create-VMWithStaticIP -vmName $vm1Name -staticIP $vm1StaticIP
-    }
-
-    $createVM2 = Read-Host "Create $vm2Name? (Y/N)"
-    if ($createVM2 -eq "Y") {
-        Create-VMWithStaticIP -vmName $vm2Name -staticIP $vm2StaticIP
-    }
+    Create-VMWithStaticIP -vmName $vm1Name -staticIP $vm1StaticIP
+    Create-VMWithStaticIP -vmName $vm2Name -staticIP $vm2StaticIP
 
     # Verify IP configurations
-    Write-Host "Verifying IP configurations for created VMs:"
-    if ($createVM1 -eq "Y") {
-        Get-AzNetworkInterface -Name "$vm1Name-nic" -ResourceGroupName $resourceGroup | Select-Object -ExpandProperty IpConfigurations
-    }
-    if ($createVM2 -eq "Y") {
-        Get-AzNetworkInterface -Name "$vm2Name-nic" -ResourceGroupName $resourceGroup | Select-Object -ExpandProperty IpConfigurations
-    }
+    Write-Host "Verifying IP configurations for $($vm1Name) and $($vm2Name):"
+    Get-AzNetworkInterface -Name "$vm1Name-nic" -ResourceGroupName $resourceGroup | Select-Object -ExpandProperty IpConfigurations
+    Get-AzNetworkInterface -Name "$vm2Name-nic" -ResourceGroupName $resourceGroup | Select-Object -ExpandProperty IpConfigurations
 
     # Output connection information
     Get-AzPublicIpAddress -ResourceGroupName $resourceGroup | ForEach-Object { 
@@ -242,7 +209,7 @@ function Install-ADDSAndPromoteDC {
                 $script = @"
                 Import-Module ADDSDeployment
                 `$securePassword = ConvertTo-SecureString '$pass' -AsPlainText -Force
-                `$username = 'LIT\$user'
+                `$username = '$user@$parentDomainName'
                 `$cred = New-Object System.Management.Automation.PSCredential (`$username, `$securePassword)
                 `$params = @{
                     NewDomainName = '$domainName'
@@ -268,20 +235,21 @@ function Install-ADDSAndPromoteDC {
             $script = @"
             Import-Module ADDSDeployment
             `$securePassword = ConvertTo-SecureString '$pass' -AsPlainText -Force
-            `$username = '$domainName\$user'
+            `$username = '$user@$domainName'
             `$cred = New-Object System.Management.Automation.PSCredential (`$username, `$securePassword)
-            `$params = @{
-                DomainName = '$domainName'
-                InstallDns = `$true
-                DatabasePath = 'C:\Windows\NTDS'
-                LogPath = 'C:\Windows\NTDS'
-                SysvolPath = 'C:\Windows\SYSVOL'
-                Credential = `$cred
-                SafeModeAdministratorPassword = `$securePassword
-                NoRebootOnCompletion = `$false
-                Force = `$true
-            }
-            Install-ADDSDomainController @params -ErrorAction Stop
+            Install-ADDSDomainController ``
+                -NoGlobalCatalog:`$false ``
+                -CreateDnsDelegation:`$false ``
+                -Credential `$cred ``
+                -CriticalReplicationOnly:`$false ``
+                -DatabasePath 'C:\Windows\NTDS' ``
+                -DomainName '$domainName' ``
+                -InstallDns:`$true ``
+                -LogPath 'C:\Windows\NTDS' ``
+                -NoRebootOnCompletion:`$false ``
+                -SysvolPath 'C:\Windows\SYSVOL' ``
+                -Force:`$true ``
+                -SafeModeAdministratorPassword `$securePassword
 "@
         }
 
@@ -306,6 +274,47 @@ function Install-ADDSAndPromoteDC {
     return $false
 }
 
+# Function to install ADDS for a region
+function Install-ADDSForRegion {
+    param (
+        [hashtable]$region,
+        [bool]$installBothDCs = $true
+    )
+    
+    $vm1Choice = if ($installBothDCs) { "Y" } else {
+        Read-Host "Install ADDS on $($region.vm1)? (Y/N)"
+    }
+    
+    if ($vm1Choice -eq "Y") {
+        $parentDomainName = if ($region.name -eq "UK West") { "" } else { "learnitlessons.com" }
+        $success = Install-ADDSAndPromoteDC -resourceGroup $region.resourceGroup -vmName $region.vm1 `
+                                            -domainName $region.domainName -parentDomainName $parentDomainName `
+                                            -isFirstDC $true -netbiosName $region.netbiosName
+        if ($success) {
+            Write-Host "Waiting 15 minutes for AD replication and DNS propagation..."
+            Start-Sleep -Seconds 900
+        } else {
+            Write-Host "Failed to promote $($region.vm1). Skipping second DC installation."
+            return
+        }
+    }
+
+    $vm2Choice = if ($installBothDCs) { "Y" } else {
+        Read-Host "Install ADDS on $($region.vm2)? (Y/N)"
+    }
+    
+    if ($vm2Choice -eq "Y") {
+        $success = Install-ADDSAndPromoteDC -resourceGroup $region.resourceGroup -vmName $region.vm2 `
+                                            -domainName $region.domainName -isFirstDC $false -netbiosName $region.netbiosName
+        if ($success) {
+            Write-Host "$($region.vm2) successfully promoted to a domain controller."
+        } else {
+            Write-Host "Failed to promote $($region.vm2) to a domain controller."
+        }
+    }
+}
+
+# Main script
 # Main script
 $regions = @(
     @{
@@ -358,13 +367,14 @@ do {
     switch ($action) {
         "1" {
             do {
-                Write-Host "`nSelect the region where you want to create VMs:"
+                Write-Host "`nSelect the region(s) you want to create VMs in:"
                 for ($i = 0; $i -lt $regions.Count; $i++) {
                     Write-Host "$($i+1). $($regions[$i].name)"
                 }
-                Write-Host "4. Back to main menu"
+                Write-Host "4. All regions"
+                Write-Host "5. Back to main menu"
 
-                $choice = Read-Host "Enter your choice (1-4)"
+                $choice = Read-Host "Enter your choice (1-5)"
 
                 switch ($choice) {
                     "1" { 
@@ -382,10 +392,17 @@ do {
                                          -addressPrefix $regions[2].addressPrefix -vm1Name $regions[2].vm1 -vm2Name $regions[2].vm2 `
                                          -vm1StaticIP $regions[2].vm1StaticIP -vm2StaticIP $regions[2].vm2StaticIP
                     }
-                    "4" { break }
+                    "4" { 
+                        foreach ($region in $regions) {
+                            Create-RegionVMs -location $region.location -resourceGroup $region.resourceGroup `
+                                             -addressPrefix $region.addressPrefix -vm1Name $region.vm1 -vm2Name $region.vm2 `
+                                             -vm1StaticIP $region.vm1StaticIP -vm2StaticIP $region.vm2StaticIP
+                        }
+                    }
+                    "5" { break }
                     default { Write-Host "Invalid choice. Please try again." }
                 }
-            } while ($choice -ne "4")
+            } while ($choice -ne "5")
         }
         "2" {
             do {
@@ -464,57 +481,22 @@ do {
         }
         "3" {
             do {
-                Write-Host "`nSelect the region or VM to install ADDS and promote DC:"
+                Write-Host "`nSelect the region to install ADDS and promote DCs:"
                 for ($i = 0; $i -lt $regions.Count; $i++) {
-                    Write-Host "$($i+1). $($regions[$i].name) (Both VMs)"
-                    Write-Host "   $($i+1)a. $($regions[$i].vm1)"
-                    Write-Host "   $($i+1)b. $($regions[$i].vm2)"
+                    Write-Host "$($i+1). $($regions[$i].name)"
                 }
                 Write-Host "4. All regions"
                 Write-Host "5. Back to main menu"
 
-                $choice = Read-Host "Enter your choice"
+                $choice = Read-Host "Enter your choice (1-5)"
 
-                function Install-ADDSForVM {
-                    param (
-                        [hashtable]$region,
-                        [string]$vmName,
-                        [bool]$isFirstDC
-                    )
-                    
-                    $parentDomainName = if ($region.name -eq "UK West") { "" } else { "learnitlessons.com" }
-                    $success = Install-ADDSAndPromoteDC -resourceGroup $region.resourceGroup -vmName $vmName `
-                                                        -domainName $region.domainName -parentDomainName $parentDomainName `
-                                                        -isFirstDC $isFirstDC -netbiosName $region.netbiosName
-                    if ($success) {
-                        Write-Host "$vmName successfully promoted to a domain controller."
-                        if ($isFirstDC) {
-                            Write-Host "Waiting 15 minutes for AD replication and DNS propagation..."
-                            Start-Sleep -Seconds 900
-                        }
-                    } else {
-                        Write-Host "Failed to promote $vmName to a domain controller."
-                    }
-                }
-
-                switch -Regex ($choice) {
-                    "^[1-3]$" { 
-                        $regionIndex = [int]$choice - 1
-                        Install-ADDSForVM -region $regions[$regionIndex] -vmName $regions[$regionIndex].vm1 -isFirstDC $true
-                        Install-ADDSForVM -region $regions[$regionIndex] -vmName $regions[$regionIndex].vm2 -isFirstDC $false
-                    }
-                    "^[1-3]a$" {
-                        $regionIndex = [int]$choice[0] - 1
-                        Install-ADDSForVM -region $regions[$regionIndex] -vmName $regions[$regionIndex].vm1 -isFirstDC $true
-                    }
-                    "^[1-3]b$" {
-                        $regionIndex = [int]$choice[0] - 1
-                        Install-ADDSForVM -region $regions[$regionIndex] -vmName $regions[$regionIndex].vm2 -isFirstDC $false
-                    }
+                switch ($choice) {
+                    "1" { Install-ADDSForRegion -region $regions[0] -installBothDCs $false }
+                    "2" { Install-ADDSForRegion -region $regions[1] -installBothDCs $false }
+                    "3" { Install-ADDSForRegion -region $regions[2] -installBothDCs $false }
                     "4" { 
                         foreach ($region in $regions) {
-                            Install-ADDSForVM -region $region -vmName $region.vm1 -isFirstDC $true
-                            Install-ADDSForVM -region $region -vmName $region.vm2 -isFirstDC $false
+                            Install-ADDSForRegion -region $region
                         }
                     }
                     "5" { break }
