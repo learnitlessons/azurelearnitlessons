@@ -33,11 +33,17 @@ function Configure-PagefileAndRestart {
 
     $script = @"
     # Configure pagefile to be automatically managed
-    $computerSystem = Get-WmiObject Win32_ComputerSystem -EnableAllPrivileges
-    $computerSystem.AutomaticManagedPagefile = $true
-    $computerSystem.Put()
+    `$sys = Get-WmiObject -Class Win32_ComputerSystem -EnableAllPrivileges
+    if (`$sys.AutomaticManagedPagefile) {
+        Write-Host "Pagefile is already automatically managed."
+    } else {
+        `$sys.AutomaticManagedPagefile = `$true
+        `$sys.Put()
+        Write-Host "Pagefile set to be automatically managed."
+    }
 
     # Restart the computer
+    Write-Host "Restarting the computer..."
     Restart-Computer -Force
 "@
 
