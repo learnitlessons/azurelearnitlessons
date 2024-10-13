@@ -72,18 +72,6 @@ Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-ukw' -vmName 'lon-dc1' -script $scr
 Write-Host "Waiting for forest to be ready (10 minutes)..."
 Start-Sleep -Seconds 600
 
-# Add new user 'shumi' and grant necessary permissions
-$script = @"
-`$securePassword = ConvertTo-SecureString '$password' -AsPlainText -Force
-New-ADUser -Name "shumi" -AccountPassword `$securePassword -Enabled `$true
-Add-ADGroupMember -Identity "Domain Admins" -Members "shumi"
-Add-ADGroupMember -Identity "Enterprise Admins" -Members "shumi"
-"@
-Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-ukw' -vmName 'lon-dc1' -script $script
-
-Write-Host "User 'shumi' added and granted permissions. Waiting for 5 minutes..."
-Start-Sleep -Seconds 300
-
 # Configure pagefile and restart lon-dc2
 Configure-PagefileAndRestart -resourceGroup 'rg-lit-ADLab-ukw' -vmName 'lon-dc2'
 
@@ -142,7 +130,7 @@ $script = @"
 Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
 Import-Module ADDSDeployment
 `$securePassword = ConvertTo-SecureString '$password' -AsPlainText -Force
-`$cred = New-Object System.Management.Automation.PSCredential ("AMS\shumi", `$securePassword)
+`$cred = New-Object System.Management.Automation.PSCredential ("LIT\shumi", `$securePassword)
 Install-ADDSDomainController -NoGlobalCatalog:`$false -CreateDnsDelegation:`$false -Credential `$cred -CriticalReplicationOnly:`$false -DatabasePath 'C:\Windows\NTDS' -DomainName 'ams.learnitlessons.com' -InstallDns:`$true -LogPath 'C:\Windows\NTDS' -NoRebootOnCompletion:`$false -SysvolPath 'C:\Windows\SYSVOL' -Force:`$true -SafeModeAdministratorPassword `$securePassword
 "@
 Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-weu' -vmName 'ams-dc2' -script $script
@@ -186,7 +174,7 @@ $script = @"
 Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
 Import-Module ADDSDeployment
 `$securePassword = ConvertTo-SecureString '$password' -AsPlainText -Force
-`$cred = New-Object System.Management.Automation.PSCredential ("MUM\shumi", `$securePassword)
+`$cred = New-Object System.Management.Automation.PSCredential ("LIT\shumi", `$securePassword)
 Install-ADDSDomainController -NoGlobalCatalog:`$false -CreateDnsDelegation:`$false -Credential `$cred -CriticalReplicationOnly:`$false -DatabasePath 'C:\Windows\NTDS' -DomainName 'mum.learnitlessons.com' -InstallDns:`$true -LogPath 'C:\Windows\NTDS' -NoRebootOnCompletion:`$false -SysvolPath 'C:\Windows\SYSVOL' -Force:`$true -SafeModeAdministratorPassword `$securePassword
 "@
 Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-cin' -vmName 'mum-dc2' -script $script
