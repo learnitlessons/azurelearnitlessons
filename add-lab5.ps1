@@ -237,18 +237,19 @@ function Install-ADDSAndPromoteDC {
             `$securePassword = ConvertTo-SecureString '$pass' -AsPlainText -Force
             `$username = '$domainName\$user'
             `$cred = New-Object System.Management.Automation.PSCredential (`$username, `$securePassword)
-            `$params = @{
-                DomainName = '$domainName'
-                InstallDns = `$true
-                DatabasePath = 'C:\Windows\NTDS'
-                LogPath = 'C:\Windows\NTDS'
-                SysvolPath = 'C:\Windows\SYSVOL'
-                Credential = `$cred
-                SafeModeAdministratorPassword = `$securePassword
-                NoRebootOnCompletion = `$false
-                Force = `$true
-            }
-            Install-ADDSDomainController @params -ErrorAction Stop
+            Install-ADDSDomainController ``
+                -NoGlobalCatalog:`$false ``
+                -CreateDnsDelegation:`$false ``
+                -Credential `$cred ``
+                -CriticalReplicationOnly:`$false ``
+                -DatabasePath 'C:\Windows\NTDS' ``
+                -DomainName '$domainName' ``
+                -InstallDns:`$true ``
+                -LogPath 'C:\Windows\NTDS' ``
+                -NoRebootOnCompletion:`$false ``
+                -SysvolPath 'C:\Windows\SYSVOL' ``
+                -Force:`$true ``
+                -SafeModeAdministratorPassword `$securePassword
 "@
         }
 
