@@ -233,7 +233,7 @@ function Install-ADDSAndPromoteDC {
             $script = @"
             Import-Module ADDSDeployment
             `$securePassword = ConvertTo-SecureString '$pass' -AsPlainText -Force
-            `$username = 'LIT\$user'
+            `$username = '$domainName\$user'
             `$cred = New-Object System.Management.Automation.PSCredential (`$username, `$securePassword)
             `$params = @{
                 DomainName = '$domainName'
@@ -271,6 +271,45 @@ function Install-ADDSAndPromoteDC {
     return $false
 }
 
+# Function to install ADDS for a region
+function Install-ADDSForRegion {
+    param (
+        [hashtable]$region,
+        [bool]$installBothDCs = $true
+    )
+    
+    $vm1Choice = if ($installBothDCs) { "Y" } else {
+        Read-Host "Install ADDS on $($region.vm1)? (Y/N)"
+    }
+    
+    if ($vm1Choice -eq "Y") {
+        $parentDomainName = if ($region.name -eq "UK West") { "" } else { "learnitlessons.com" }
+        $success = Install-ADDSAndPromoteDC -resourceGroup $region.resourceGroup -vmName $region.vm1 `
+                                            -domainName $region.domainName -parentDomainName $parentDomainName `
+                                            -isFirstDC $true -netbiosName $region.netbiosName
+        if ($success) {
+            Write-Host "Waiting 15 minutes for AD replication and DNS propagation..."
+            Start-Sleep -Seconds 900
+        } else {
+            Write-Host "Failed to promote $($region.vm1). Skipping second DC installation."
+            return
+        }
+    }
+
+    $vm2Choice = if ($installBothDCs) { "Y" } else {
+        Read-Host "Install ADDS on $($region.vm2)? (Y/N)"
+    }
+    
+    if ($vm2Choice -eq "Y") {
+        $success = Install-ADDSAndPromoteDC -resourceGroup $region.resourceGroup -vmName $region.vm2 `
+                                            -domainName $region.domainName -isFirstDC $false
+        if ($success) {
+            Write-Host "$($region.vm2) successfully promoted to a domain controller."
+        } else {
+            Write-Host "Failed to promote $($region.vm2) to a domain controller."
+        }
+    }
+}
 # Main script
 $regions = @(
     @{
