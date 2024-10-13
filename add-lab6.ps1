@@ -165,8 +165,38 @@ function Install-ADDSAndPromoteDC {
         [string]$domainName,
         [string]$parentDomainName,
         [bool]$isFirstDC,
-        [string]$netbiosName
+        [string]$netbiosName,
+        [string]$firstDCIP
     )
+
+    # Configure DNS to point to the first DC
+    $script = @"
+    `$adapter = Get-NetAdapter | Where-Object { `$_.Status -eq 'Up' -and `$_.InterfaceDescription -like '*Hyper-V*' }
+    if (`$adapter) {
+        Set-DnsClientServerAddress -InterfaceIndex `$adapter.InterfaceIndex -ServerAddresses $firstDCIP
+        Write-Output "DNS server set to $firstDCIP for adapter `$(`$adapter.Name)"
+    } else {
+        Write-Output "No suitable network adapter found"
+    }
+    ipconfig /flushdns
+    Get-DnsClientServerAddress -AddressFamily IPv4 | Format-Table -AutoSize
+"@
+    $result = Run-AzVMCommand -resourceGroup $resourceGroup -vmName $vmName -script $script
+    if ($result -eq $null -or $result.Status -ne "Succeeded") {
+        Write-Host "Failed to configure DNS on $vmName. Skipping DC promotion."
+        return $false
+    }
+
+    # Verify DNS configuration
+    $script = @"
+    nslookup $domainName
+    Test-NetConnection -ComputerName $domainName
+"@
+    $result = Run-AzVMCommand -resourceGroup $resourceGroup -vmName $vmName -script $script
+    if ($result -eq $null -or $result.Status -ne "Succeeded") {
+        Write-Host "DNS verification failed on $vmName. Skipping DC promotion."
+        return $false
+    }
 
     # Install ADDS role
     $script = "Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools"
@@ -285,11 +315,11 @@ function Install-ADDSForRegion {
         Read-Host "Install ADDS on $($region.vm1)? (Y/N)"
     }
     
-    if ($vm1Choice -eq "Y") {
+if ($vm1Choice -eq "Y") {
         $parentDomainName = if ($region.name -eq "UK West") { "" } else { "learnitlessons.com" }
         $success = Install-ADDSAndPromoteDC -resourceGroup $region.resourceGroup -vmName $region.vm1 `
                                             -domainName $region.domainName -parentDomainName $parentDomainName `
-                                            -isFirstDC $true -netbiosName $region.netbiosName
+                                            -isFirstDC $true -netbiosName $region.netbiosName -firstDCIP $region.vm1StaticIP
         if ($success) {
             Write-Host "Waiting 15 minutes for AD replication and DNS propagation..."
             Start-Sleep -Seconds 900
@@ -305,7 +335,8 @@ function Install-ADDSForRegion {
     
     if ($vm2Choice -eq "Y") {
         $success = Install-ADDSAndPromoteDC -resourceGroup $region.resourceGroup -vmName $region.vm2 `
-                                            -domainName $region.domainName -isFirstDC $false -netbiosName $region.netbiosName
+                                            -domainName $region.domainName -isFirstDC $false -netbiosName $region.netbiosName `
+                                            -firstDCIP $region.vm1StaticIP
         if ($success) {
             Write-Host "$($region.vm2) successfully promoted to a domain controller."
         } else {
@@ -314,7 +345,6 @@ function Install-ADDSForRegion {
     }
 }
 
-# Main script
 # Main script
 $regions = @(
     @{
