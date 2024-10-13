@@ -65,12 +65,24 @@ $script = @"
 Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
 Import-Module ADDSDeployment
 `$securePassword = ConvertTo-SecureString '$password' -AsPlainText -Force
-Install-ADDSForest -CreateDnsDelegation:`$false -DatabasePath 'C:\Windows\NTDS' -DomainMode 'WinThreshold' -DomainName 'learnitlessons.com' -DomainNetbiosName 'LEARNITLESSONS' -ForestMode 'WinThreshold' -InstallDns:`$true -LogPath 'C:\Windows\NTDS' -NoRebootOnCompletion:`$false -SysvolPath 'C:\Windows\SYSVOL' -Force:`$true -SafeModeAdministratorPassword `$securePassword
+Install-ADDSForest -CreateDnsDelegation:`$false -DatabasePath 'C:\Windows\NTDS' -DomainMode 'WinThreshold' -DomainName 'learnitlessons.com' -DomainNetbiosName 'LIT' -ForestMode 'WinThreshold' -InstallDns:`$true -LogPath 'C:\Windows\NTDS' -NoRebootOnCompletion:`$false -SysvolPath 'C:\Windows\SYSVOL' -Force:`$true -SafeModeAdministratorPassword `$securePassword
 "@
 Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-ukw' -vmName 'lon-dc1' -script $script
 
 Write-Host "Waiting for forest to be ready (10 minutes)..."
 Start-Sleep -Seconds 600
+
+# Add new user 'shumi' and grant necessary permissions
+$script = @"
+`$securePassword = ConvertTo-SecureString '$password' -AsPlainText -Force
+New-ADUser -Name "shumi" -AccountPassword `$securePassword -Enabled `$true
+Add-ADGroupMember -Identity "Domain Admins" -Members "shumi"
+Add-ADGroupMember -Identity "Enterprise Admins" -Members "shumi"
+"@
+Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-ukw' -vmName 'lon-dc1' -script $script
+
+Write-Host "User 'shumi' added and granted permissions. Waiting for 5 minutes..."
+Start-Sleep -Seconds 300
 
 # Configure pagefile and restart lon-dc2
 Configure-PagefileAndRestart -resourceGroup 'rg-lit-ADLab-ukw' -vmName 'lon-dc2'
@@ -86,7 +98,8 @@ $script = @"
 Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
 Import-Module ADDSDeployment
 `$securePassword = ConvertTo-SecureString '$password' -AsPlainText -Force
-Install-ADDSDomainController -NoGlobalCatalog:`$false -CreateDnsDelegation:`$false -CriticalReplicationOnly:`$false -DatabasePath 'C:\Windows\NTDS' -DomainName 'learnitlessons.com' -InstallDns:`$true -LogPath 'C:\Windows\NTDS' -NoRebootOnCompletion:`$false -SysvolPath 'C:\Windows\SYSVOL' -Force:`$true -SafeModeAdministratorPassword `$securePassword
+`$cred = New-Object System.Management.Automation.PSCredential ("LIT\shumi", `$securePassword)
+Install-ADDSDomainController -NoGlobalCatalog:`$false -CreateDnsDelegation:`$false -Credential `$cred -CriticalReplicationOnly:`$false -DatabasePath 'C:\Windows\NTDS' -DomainName 'learnitlessons.com' -InstallDns:`$true -LogPath 'C:\Windows\NTDS' -NoRebootOnCompletion:`$false -SysvolPath 'C:\Windows\SYSVOL' -Force:`$true -SafeModeAdministratorPassword `$securePassword
 "@
 Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-ukw' -vmName 'lon-dc2' -script $script
 
@@ -107,7 +120,8 @@ $script = @"
 Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
 Import-Module ADDSDeployment
 `$securePassword = ConvertTo-SecureString '$password' -AsPlainText -Force
-Install-ADDSDomain -NoGlobalCatalog:`$false -CreateDnsDelegation:`$true -DatabasePath 'C:\Windows\NTDS' -DomainMode 'WinThreshold' -DomainType 'ChildDomain' -InstallDns:`$true -LogPath 'C:\Windows\NTDS' -NewDomainName 'ams' -NewDomainNetbiosName 'AMS' -ParentDomainName 'learnitlessons.com' -NoRebootOnCompletion:`$false -SysvolPath 'C:\Windows\SYSVOL' -Force:`$true -SafeModeAdministratorPassword `$securePassword
+`$cred = New-Object System.Management.Automation.PSCredential ("LIT\shumi", `$securePassword)
+Install-ADDSDomain -NoGlobalCatalog:`$false -CreateDnsDelegation:`$true -Credential `$cred -DatabasePath 'C:\Windows\NTDS' -DomainMode 'WinThreshold' -DomainType 'ChildDomain' -InstallDns:`$true -LogPath 'C:\Windows\NTDS' -NewDomainName 'ams' -NewDomainNetbiosName 'AMS' -ParentDomainName 'learnitlessons.com' -NoRebootOnCompletion:`$false -SysvolPath 'C:\Windows\SYSVOL' -Force:`$true -SafeModeAdministratorPassword `$securePassword
 "@
 Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-weu' -vmName 'ams-dc1' -script $script
 
@@ -128,7 +142,8 @@ $script = @"
 Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
 Import-Module ADDSDeployment
 `$securePassword = ConvertTo-SecureString '$password' -AsPlainText -Force
-Install-ADDSDomainController -NoGlobalCatalog:`$false -CreateDnsDelegation:`$false -CriticalReplicationOnly:`$false -DatabasePath 'C:\Windows\NTDS' -DomainName 'ams.learnitlessons.com' -InstallDns:`$true -LogPath 'C:\Windows\NTDS' -NoRebootOnCompletion:`$false -SysvolPath 'C:\Windows\SYSVOL' -Force:`$true -SafeModeAdministratorPassword `$securePassword
+`$cred = New-Object System.Management.Automation.PSCredential ("AMS\shumi", `$securePassword)
+Install-ADDSDomainController -NoGlobalCatalog:`$false -CreateDnsDelegation:`$false -Credential `$cred -CriticalReplicationOnly:`$false -DatabasePath 'C:\Windows\NTDS' -DomainName 'ams.learnitlessons.com' -InstallDns:`$true -LogPath 'C:\Windows\NTDS' -NoRebootOnCompletion:`$false -SysvolPath 'C:\Windows\SYSVOL' -Force:`$true -SafeModeAdministratorPassword `$securePassword
 "@
 Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-weu' -vmName 'ams-dc2' -script $script
 
@@ -149,7 +164,8 @@ $script = @"
 Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
 Import-Module ADDSDeployment
 `$securePassword = ConvertTo-SecureString '$password' -AsPlainText -Force
-Install-ADDSDomain -NoGlobalCatalog:`$false -CreateDnsDelegation:`$true -DatabasePath 'C:\Windows\NTDS' -DomainMode 'WinThreshold' -DomainType 'ChildDomain' -InstallDns:`$true -LogPath 'C:\Windows\NTDS' -NewDomainName 'mum' -NewDomainNetbiosName 'MUM' -ParentDomainName 'learnitlessons.com' -NoRebootOnCompletion:`$false -SysvolPath 'C:\Windows\SYSVOL' -Force:`$true -SafeModeAdministratorPassword `$securePassword
+`$cred = New-Object System.Management.Automation.PSCredential ("LIT\shumi", `$securePassword)
+Install-ADDSDomain -NoGlobalCatalog:`$false -CreateDnsDelegation:`$true -Credential `$cred -DatabasePath 'C:\Windows\NTDS' -DomainMode 'WinThreshold' -DomainType 'ChildDomain' -InstallDns:`$true -LogPath 'C:\Windows\NTDS' -NewDomainName 'mum' -NewDomainNetbiosName 'MUM' -ParentDomainName 'learnitlessons.com' -NoRebootOnCompletion:`$false -SysvolPath 'C:\Windows\SYSVOL' -Force:`$true -SafeModeAdministratorPassword `$securePassword
 "@
 Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-cin' -vmName 'mum-dc1' -script $script
 
@@ -170,7 +186,8 @@ $script = @"
 Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
 Import-Module ADDSDeployment
 `$securePassword = ConvertTo-SecureString '$password' -AsPlainText -Force
-Install-ADDSDomainController -NoGlobalCatalog:`$false -CreateDnsDelegation:`$false -CriticalReplicationOnly:`$false -DatabasePath 'C:\Windows\NTDS' -DomainName 'mum.learnitlessons.com' -InstallDns:`$true -LogPath 'C:\Windows\NTDS' -NoRebootOnCompletion:`$false -SysvolPath 'C:\Windows\SYSVOL' -Force:`$true -SafeModeAdministratorPassword `$securePassword
+`$cred = New-Object System.Management.Automation.PSCredential ("MUM\shumi", `$securePassword)
+Install-ADDSDomainController -NoGlobalCatalog:`$false -CreateDnsDelegation:`$false -Credential `$cred -CriticalReplicationOnly:`$false -DatabasePath 'C:\Windows\NTDS' -DomainName 'mum.learnitlessons.com' -InstallDns:`$true -LogPath 'C:\Windows\NTDS' -NoRebootOnCompletion:`$false -SysvolPath 'C:\Windows\SYSVOL' -Force:`$true -SafeModeAdministratorPassword `$securePassword
 "@
 Run-AzVMCommand -resourceGroup 'rg-lit-ADLab-cin' -vmName 'mum-dc2' -script $script
 
