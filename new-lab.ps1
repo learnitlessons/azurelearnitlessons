@@ -1,90 +1,3 @@
-# Basic settings
-$user = "shumi"
-$pass = "YourSecurePassword123!" # Replace with a secure password
-$securePass = ConvertTo-SecureString $pass -AsPlainText -Force
-
-# Function to create VMs in a specific region with static IPs
-function Create-RegionVMs {
-    param (
-        [string]$location,
-        [string]$resourceGroup,
-        [string]$addressPrefix,
-        [string]$vm1Name,
-        [string]$vm2Name,
-        [string]$vm1StaticIP,
-        [string]$vm2StaticIP
-    )
-
-    New-AzResourceGroup -Name $resourceGroup -Location $location -ErrorAction SilentlyContinue
-
-    $vnet = New-AzVirtualNetwork -ResourceGroupName $resourceGroup -Location $location -Name "vnet-$location" -AddressPrefix $addressPrefix -Subnet (New-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix ($addressPrefix -replace '0/16', '0/24'))
-
-    # Function to create a VM with static IP and configure pagefile
-    function Create-VMWithStaticIP {
-        param (
-            [string]$vmName,
-            [string]$staticIP
-        )
-
-        $pip = New-AzPublicIpAddress -Name "$vmName-pip" -ResourceGroupName $resourceGroup -Location $location -AllocationMethod Static -Sku Standard
-        $nic = New-AzNetworkInterface -Name "$vmName-nic" -ResourceGroupName $resourceGroup -Location $location -SubnetId $vnet.Subnets[0].Id -PublicIpAddressId $pip.Id -PrivateIpAddress $staticIP
-        $nic.IpConfigurations[0].PrivateIpAllocationMethod = "Static"
-        Set-AzNetworkInterface -NetworkInterface $nic
-        $nsg = New-AzNetworkSecurityGroup -ResourceGroupName $resourceGroup -Location $location -Name "$vmName-nsg" -SecurityRules (New-AzNetworkSecurityRuleConfig -Name "RDP" -Protocol Tcp -Direction Inbound -Priority 1000 -SourceAddressPrefix * -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 3389 -Access Allow)
-        $nic.NetworkSecurityGroup = $nsg
-        Set-AzNetworkInterface -NetworkInterface $nic
-        $vmConfig = New-AzVMConfig -VMName $vmName -VMSize "Standard_B1s" | 
-            Set-AzVMOperatingSystem -Windows -ComputerName $vmName -Credential (New-Object PSCredential($user, $securePass)) | 
-            Set-AzVMSourceImage -PublisherName "MicrosoftWindowsServer" -Offer "WindowsServer" -Skus "2022-datacenter-azure-edition" -Version "latest" | 
-            Add-AzVMNetworkInterface -Id $nic.Id | 
-            Set-AzVMBootDiagnostic -Disable
-        New-AzVM -ResourceGroupName $resourceGroup -Location $location -VM $vmConfig
-
-        # Configure pagefile
-        $script = @"
-        `$computerSystem = Get-WmiObject -Class Win32_ComputerSystem -EnableAllPrivileges
-        if (`$computerSystem.AutomaticManagedPagefile) {
-            Write-Host "Pagefile is already automatically managed."
-        } else {
-            `$computerSystem.AutomaticManagedPagefile = `$true
-            `$result = `$computerSystem.Put()
-            if (`$result.ReturnValue -eq 0) {
-                Write-Host "Pagefile set to be automatically managed."
-            } else {
-                Write-Host "Failed to set pagefile to automatically managed. Return value: `$(`$result.ReturnValue)"
-            }
-        }
-        Restart-Computer -Force
-"@
-        Run-AzVMCommand -resourceGroup $resourceGroup -vmName $vmName -script $script
-    }
-
-    # Create VMs
-    Create-VMWithStaticIP -vmName $vm1Name -staticIP $vm1StaticIP
-    Create-VMWithStaticIP -vmName $vm2Name -staticIP $vm2StaticIP
-
-    # Verify IP configurations
-    Write-Host "Verifying IP configurations for $($vm1Name) and $($vm2Name):"
-    Get-AzNetworkInterface -Name "$vm1Name-nic" -ResourceGroupName $resourceGroup | Select-Object -ExpandProperty IpConfigurations
-    Get-AzNetworkInterface -Name "$vm2Name-nic" -ResourceGroupName $resourceGroup | Select-Object -ExpandProperty IpConfigurations
-
-    # Output connection information
-    Get-AzPublicIpAddress -ResourceGroupName $resourceGroup | ForEach-Object { 
-        Write-Output "VM: $($_.Name.Replace('-pip','')) Public IP: $($_.IpAddress) RDP: mstsc /v:$($_.IpAddress) /u:$user" 
-    }
-}
-
-# Function to remove resources in a specific region
-function Remove-RegionResources {
-    param (
-        [string]$resourceGroup
-    )
-
-    Write-Host "Removing all resources in resource group: $resourceGroup"
-    Remove-AzResourceGroup -Name $resourceGroup -Force
-    Write-Host "Resources removed successfully."
-}
-
 # Function to run command on VM and check for errors
 function Run-AzVMCommand {
     param (
@@ -93,17 +6,25 @@ function Run-AzVMCommand {
         [string]$script
     )
     
-    $script = $script -replace '"', '\"'
-    $result = az vm run-command invoke --command-id RunPowerShellScript --name $vmName -g $resourceGroup --scripts "$script"
-    $output = $result | ConvertFrom-Json
-    
-    if ($output.value.message -match "Error") {
+    try {
+        $result = Invoke-AzVMRunCommand -ResourceGroupName $resourceGroup -VMName $vmName -CommandId 'RunPowerShellScript' -ScriptString $script -ErrorAction Stop
+        
+        if ($result.Status -eq "Succeeded") {
+            Write-Host "Command executed successfully on $vmName"
+            Write-Host $result.Value[0].Message
+        } else {
+            Write-Host "Error occurred while executing command on $vmName"
+            Write-Host $result.Value[0].Message
+            return $false
+        }
+    }
+    catch {
         Write-Host "Error occurred while executing command on $vmName"
-        Write-Host $output.value.message
-        exit 1
+        Write-Host $_.Exception.Message
+        return $false
     }
     
-    Write-Host "Command executed successfully on $vmName"
+    return $true
 }
 
 # Function to install ADDS role and promote DC
@@ -119,7 +40,11 @@ function Install-ADDSAndPromoteDC {
 
     # Install ADDS role
     $script = "Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools"
-    Run-AzVMCommand -resourceGroup $resourceGroup -vmName $vmName -script $script
+    $success = Run-AzVMCommand -resourceGroup $resourceGroup -vmName $vmName -script $script
+    if (-not $success) {
+        Write-Host "Failed to install ADDS role on $vmName. Skipping DC promotion."
+        return
+    }
 
     # Promote DC
     if ($isFirstDC) {
@@ -151,10 +76,15 @@ function Install-ADDSAndPromoteDC {
 "@
     }
 
-    Run-AzVMCommand -resourceGroup $resourceGroup -vmName $vmName -script $script
+    $success = Run-AzVMCommand -resourceGroup $resourceGroup -vmName $vmName -script $script
+    if ($success) {
+        Write-Host "ADDS installation and DC promotion completed successfully on $vmName"
+    } else {
+        Write-Host "Failed to promote $vmName to a domain controller"
+    }
 }
 
-# ... [The rest of the script, including $regions definition and main menu, remains unchanged] ...
+# ... [The rest of the script remains unchanged] ...
 
 # Main script
 $regions = @(
