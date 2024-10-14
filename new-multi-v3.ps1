@@ -21,7 +21,7 @@ function Create-RegionVMs {
 
     $vnet = New-AzVirtualNetwork -ResourceGroupName $resourceGroup -Location $location -Name "vnet-$location" -AddressPrefix $addressPrefix -Subnet (New-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix ($addressPrefix -replace '0/16', '0/24'))
 
-    # Function to create a VM with static IP
+    # Function to create a VM with static IP and Basic SSD
     function Create-VMWithStaticIP {
         param (
             [string]$vmName,
@@ -35,11 +35,17 @@ function Create-RegionVMs {
         $nsg = New-AzNetworkSecurityGroup -ResourceGroupName $resourceGroup -Location $location -Name "$vmName-nsg" -SecurityRules (New-AzNetworkSecurityRuleConfig -Name "RDP" -Protocol Tcp -Direction Inbound -Priority 1000 -SourceAddressPrefix * -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 3389 -Access Allow)
         $nic.NetworkSecurityGroup = $nsg
         Set-AzNetworkInterface -NetworkInterface $nic
+
+        # Create a configuration for the OS disk with Basic SSD
+        $osDiskConfig = New-AzDiskConfig -Location $location -CreateOption FromImage -SkuName StandardSSD_LRS
+
         $vmConfig = New-AzVMConfig -VMName $vmName -VMSize "Standard_B1s" | 
             Set-AzVMOperatingSystem -Windows -ComputerName $vmName -Credential (New-Object PSCredential($user, $securePass)) | 
             Set-AzVMSourceImage -PublisherName "MicrosoftWindowsServer" -Offer "WindowsServer" -Skus "2022-datacenter-azure-edition" -Version "latest" | 
             Add-AzVMNetworkInterface -Id $nic.Id | 
+            Set-AzVMOSDisk -DiskSizeInGB 128 -CreateOption FromImage -StorageAccountType StandardSSD_LRS |
             Set-AzVMBootDiagnostic -Disable
+
         New-AzVM -ResourceGroupName $resourceGroup -Location $location -VM $vmConfig
     }
 
