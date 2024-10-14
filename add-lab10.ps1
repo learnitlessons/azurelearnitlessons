@@ -120,6 +120,12 @@ function Create-MemberServer {
 
 # ... (rest of the functions remain the same)
 
+
+
+
+
+# ... (previous code remains the same)
+
 # Main script
 $regions = @(
     @{
@@ -171,6 +177,61 @@ do {
     Write-Host "7. Exit"
 
     $action = Read-Host "Enter your choice (1-7)"
+
+    switch ($action) {
+        "1" {
+            do {
+                Write-Host "`nSelect the region(s) you want to create VMs in:"
+                for ($i = 0; $i -lt $regions.Count; $i++) {
+                    Write-Host "$($i+1). $($regions[$i].name)"
+                }
+                Write-Host "4. All regions"
+                Write-Host "5. Back to main menu"
+
+                $choice = Read-Host "Enter your choice (1-5)"
+
+                switch ($choice) {
+                    "1" { 
+                        Create-RegionVMs -location $regions[0].location -resourceGroup $regions[0].resourceGroup `
+                                         -addressPrefix $regions[0].addressPrefix -vm1Name $regions[0].vm1 -vm2Name $regions[0].vm2 `
+                                         -vm1StaticIP $regions[0].vm1StaticIP -vm2StaticIP $regions[0].vm2StaticIP
+                    }
+                    "2" { 
+                        Create-RegionVMs -location $regions[1].location -resourceGroup $regions[1].resourceGroup `
+                                         -addressPrefix $regions[1].addressPrefix -vm1Name $regions[1].vm1 -vm2Name $regions[1].vm2 `
+                                         -vm1StaticIP $regions[1].vm1StaticIP -vm2StaticIP $regions[1].vm2StaticIP
+                    }
+                    "3" { 
+                        Create-RegionVMs -location $regions[2].location -resourceGroup $regions[2].resourceGroup `
+                                         -addressPrefix $regions[2].addressPrefix -vm1Name $regions[2].vm1 -vm2Name $regions[2].vm2 `
+                                         -vm1StaticIP $regions[2].vm1StaticIP -vm2StaticIP $regions[2].vm2StaticIP
+                    }
+                    "4" { 
+                        foreach ($region in $regions) {
+                            Create-RegionVMs -location $region.location -resourceGroup $region.resourceGroup `
+                                             -addressPrefix $region.addressPrefix -vm1Name $region.vm1 -vm2Name $region.vm2 `
+                                             -vm1StaticIP $region.vm1StaticIP -vm2StaticIP $region.vm2StaticIP
+                        }
+                    }
+                    "5" { break }
+                    default { Write-Host "Invalid choice. Please try again." }
+                }
+            } while ($choice -ne "5")
+        }
+        "2" {
+            # ... (code for removing resources, same as before)
+        }
+        "3" {
+            do {
+                Write-Host "`nSelect the region to install ADDS and promote DCs:"
+                for ($i = 0; $i -lt $regions.Count; $i++) {
+                    Write-Host "$($i+1). $($regions[$i].name)"
+                }
+                Write-Host "4. All regions"
+                Write-Host "5. Back to main menu"
+
+                $choice = Read-Host "Enter your choice (1-5)"
+
                 switch ($choice) {
                     "1" { Install-ADDSForRegion -region $regions[0] -installBothDCs $false }
                     "2" { Install-ADDSForRegion -region $regions[1] -installBothDCs $false }
@@ -215,7 +276,7 @@ do {
             
             Read-Host "Press Enter to continue..."
         }
-         "6" {
+        "6" {
             do {
                 Write-Host "`nSelect the region to add a member server:"
                 for ($i = 0; $i -lt $regions.Count; $i++) {
