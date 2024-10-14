@@ -39,7 +39,9 @@ function Create-RegionVMs {
             Set-AzVMOperatingSystem -Windows -ComputerName $vmName -Credential (New-Object PSCredential($user, $securePass)) | 
             Set-AzVMSourceImage -PublisherName "MicrosoftWindowsServer" -Offer "WindowsServer" -Skus "2022-datacenter-azure-edition" -Version "latest" | 
             Add-AzVMNetworkInterface -Id $nic.Id | 
-            Set-AzVMBootDiagnostic -Disable
+            Set-AzVMBootDiagnostic -Disable |
+    #added this
+            Set-AzVMOSDisk -CreateOption FromImage -StorageAccountType StandardSSD_LRS
         New-AzVM -ResourceGroupName $resourceGroup -Location $location -VM $vmConfig
 
         # Configure pagefile
