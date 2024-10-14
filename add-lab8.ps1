@@ -408,26 +408,23 @@ function Create-VNetPeering {
             $vnet2 = Get-AzVirtualNetwork -ResourceGroupName $region2.resourceGroup -Name "vnet-$($region2.location)"
 
             # Create peering from vnet1 to vnet2
-            Add-AzVirtualNetworkPeering -Name "$($region1.name)-to-$($region2.name)" `
+            $peering1Name = "$($region1.name)-to-$($region2.name)" -replace '\s', '-'
+            Add-AzVirtualNetworkPeering -Name $peering1Name `
                                         -VirtualNetwork $vnet1 `
                                         -RemoteVirtualNetworkId $vnet2.Id `
-                                        -AllowForwardedTraffic `
-                                        -AllowGatewayTransit `
-                                        -UseRemoteGateways
+                                        -AllowForwardedTraffic
 
             # Create peering from vnet2 to vnet1
-            Add-AzVirtualNetworkPeering -Name "$($region2.name)-to-$($region1.name)" `
+            $peering2Name = "$($region2.name)-to-$($region1.name)" -replace '\s', '-'
+            Add-AzVirtualNetworkPeering -Name $peering2Name `
                                         -VirtualNetwork $vnet2 `
                                         -RemoteVirtualNetworkId $vnet1.Id `
-                                        -AllowForwardedTraffic `
-                                        -AllowGatewayTransit `
-                                        -UseRemoteGateways
+                                        -AllowForwardedTraffic
 
             Write-Host "VNet peering created successfully between $($region1.name) and $($region2.name)"
         }
     }
 }
-
 # Main script
 $regions = @(
     @{
