@@ -83,21 +83,45 @@ function Create-RouteTables {
     )
 
     foreach ($region in $regions) {
-        $routeTable = New-AzRouteTable -Name "rt-$($region.name)" -ResourceGroupName $region.resourceGroup -Location $region.location
+        $routeTableName = "rt-" + ($region.name -replace '\s', '-')
+        Write-Host "Creating route table: $routeTableName"
+        
+        try {
+            $routeTable = New-AzRouteTable -Name $routeTableName -ResourceGroupName $region.resourceGroup -Location $region.location -Force
 
-        foreach ($otherRegion in $regions) {
-            if ($otherRegion.name -ne $region.name) {
-                Add-AzRouteConfig -Name "route-to-$($otherRegion.name)" -AddressPrefix $otherRegion.addressPrefix -NextHopType VirtualAppliance -NextHopIpAddress $otherRegion.vm1StaticIP -RouteTable $routeTable
+            foreach ($otherRegion in $regions) {
+                if ($otherRegion.name -ne $region.name) {
+                    $routeName = "route-to-" + ($otherRegion.name -replace '\s', '-')
+                    Write-Host "Adding route: $routeName"
+                    
+                    Add-AzRouteConfig -Name $routeName `
+                                      -AddressPrefix $otherRegion.addressPrefix `
+                                      -NextHopType VirtualAppliance `
+                                      -NextHopIpAddress $otherRegion.vm1StaticIP `
+                                      -RouteTable $routeTable
+                }
             }
+
+            $routeTable | Set-AzRouteTable
+
+            Write-Host "Associating route table with subnet"
+            $vnet = Get-AzVirtualNetwork -ResourceGroupName $region.resourceGroup -Name "vnet-$($region.location)"
+            $subnet = Get-AzVirtualNetworkSubnetConfig -VirtualNetwork $vnet -Name "default"
+            
+            Set-AzVirtualNetworkSubnetConfig -Name "default" `
+                                             -VirtualNetwork $vnet `
+                                             -AddressPrefix $subnet.AddressPrefix `
+                                             -RouteTable $routeTable | Set-AzVirtualNetwork
+            
+            Write-Host "Route table created and associated successfully for $($region.name)"
         }
-
-        Set-AzRouteTable -RouteTable $routeTable
-
-        $vnet = Get-AzVirtualNetwork -ResourceGroupName $region.resourceGroup -Name "vnet-$($region.location)"
-        Set-AzVirtualNetworkSubnetConfig -VirtualNetwork $vnet -Name "default" -AddressPrefix ($region.addressPrefix -replace '0/16', '0/24') -RouteTable $routeTable
-        $vnet | Set-AzVirtualNetwork
+        catch {
+            Write-Host "Error creating route table for $($region.name): $_"
+        }
     }
 }
+
+# Rest of the script remains the same
 
 # Function to remove resources in a specific region
 function Remove-RegionResources {
