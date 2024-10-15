@@ -231,43 +231,99 @@ function Join-Domain {
 
     Invoke-AzVMRunCommand -ResourceGroupName $resourceGroup -VMName $vmName -CommandId 'RunPowerShellScript' -ScriptString $script
 }
+# Azure PKI Lab Setup Script
+
+
 
 #================================
 # 10. MAIN SCRIPT
 #================================
 
+# Function to create virtual network with retry logic
+function Create-VirtualNetworkWithRetry {
+    $retryCount = 0
+    $maxRetries = 5
+    $retryDelay = 30
+
+    while ($retryCount -lt $maxRetries) {
+        try {
+            $vnet = New-AzVirtualNetwork -ResourceGroupName $resourceGroup -Location $location -Name "vnet-pkilab" -AddressPrefix $addressPrefix
+            $subnetConfig = Add-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix $subnetPrefix -VirtualNetwork $vnet
+            $vnet | Set-AzVirtualNetwork
+
+            # Refresh the $vnet object to get the updated configuration
+            $vnet = Get-AzVirtualNetwork -Name "vnet-pkilab" -ResourceGroupName $resourceGroup
+            return $vnet
+        }
+        catch {
+            Write-Host "Failed to create virtual network. Retrying in $retryDelay seconds..."
+            Start-Sleep -Seconds $retryDelay
+            $retryCount++
+        }
+    }
+
+    throw "Failed to create virtual network after $maxRetries attempts."
+}
+
 # Create resource group
 New-AzResourceGroup -Name $resourceGroup -Location $location -Force
 
-# Create virtual network
-$vnet = New-AzVirtualNetwork -ResourceGroupName $resourceGroup -Location $location -Name "vnet-pkilab" -AddressPrefix $addressPrefix
-$subnetConfig = Add-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix $subnetPrefix -VirtualNetwork $vnet
-$vnet | Set-AzVirtualNetwork
-
-# Refresh the $vnet object to get the updated configuration
-$vnet = Get-AzVirtualNetwork -Name "vnet-pkilab" -ResourceGroupName $resourceGroup
+# Create virtual network with retry
+try {
+    $vnet = Create-VirtualNetworkWithRetry
+    Write-Host "Virtual network created successfully."
+}
+catch {
+    Write-Host "Failed to create virtual network. Exiting script."
+    return
+}
 
 # Create VMs
 foreach ($vm in $vmConfigs) {
-    Create-VM -vmName $vm.name -vmSize $vm.size -staticIP $vm.staticIP -role $vm.role
+    try {
+        Create-VM -vmName $vm.name -vmSize $vm.size -staticIP $vm.staticIP -role $vm.role
+        Write-Host "VM $($vm.name) created successfully."
+    }
+    catch {
+        Write-Host "Failed to create VM $($vm.name). Error: $_"
+    }
 }
 
 # Install ADDS and promote to DC
-Install-ADDS -vmName "lit-dc1"
+try {
+    Install-ADDS -vmName "lit-dc1"
+    Write-Host "ADDS installed and promoted to DC successfully."
+}
+catch {
+    Write-Host "Failed to install ADDS and promote to DC. Error: $_"
+    return
+}
 
 # Wait for DC to be ready (you might need to adjust the wait time)
 Write-Host "Waiting for DC to be ready..."
 Start-Sleep -Seconds 300
 
 # Create OUs and users
-Write-Host "Creating OUs, users, and groups..."
-Create-OUsAndUsers -vmName "lit-dc1"
+try {
+    Write-Host "Creating OUs, users, and groups..."
+    Create-OUsAndUsers -vmName "lit-dc1"
+    Write-Host "OUs, users, and groups created successfully."
+}
+catch {
+    Write-Host "Failed to create OUs and users. Error: $_"
+}
 
 # Configure DNS on all VMs
 foreach ($vm in $vmConfigs) {
     if ($vm.name -ne "lit-dc1") {
-        Write-Host "Configuring DNS for $($vm.name)..."
-        Configure-DNS -vmName $vm.name -dnsIP $vmConfigs[0].staticIP
+        try {
+            Write-Host "Configuring DNS for $($vm.name)..."
+            Configure-DNS -vmName $vm.name -dnsIP $vmConfigs[0].staticIP
+            Write-Host "DNS configured successfully for $($vm.name)."
+        }
+        catch {
+            Write-Host "Failed to configure DNS for $($vm.name). Error: $_"
+        }
     }
 }
 
@@ -279,27 +335,46 @@ foreach ($vmName in $vmsToJoin) {
     $maxRetries = 3
 
     while (-not $dnsConfigured -and $retryCount -lt $maxRetries) {
-        Write-Host "Verifying DNS configuration for $vmName..."
-        $dnsConfigured = Verify-DNSConfiguration -vmName $vmName -expectedDNS $vmConfigs[0].staticIP
-        
-        if (-not $dnsConfigured) {
-            Write-Host "DNS not correctly configured for $vmName. Retrying configuration..."
-            Configure-DNS -vmName $vmName -dnsIP $vmConfigs[0].staticIP
-            Start-Sleep -Seconds 30
+        try {
+            Write-Host "Verifying DNS configuration for $vmName..."
+            $dnsConfigured = Verify-DNSConfiguration -vmName $vmName -expectedDNS $vmConfigs[0].staticIP
+            
+            if (-not $dnsConfigured) {
+                Write-Host "DNS not correctly configured for $vmName. Retrying configuration..."
+                Configure-DNS -vmName $vmName -dnsIP $vmConfigs[0].staticIP
+                Start-Sleep -Seconds 30
+                $retryCount++
+            }
+        }
+        catch {
+            Write-Host "Error verifying or configuring DNS for $vmName. Retrying..."
             $retryCount++
+            Start-Sleep -Seconds 30
         }
     }
 
     if ($dnsConfigured) {
-        Write-Host "Joining $vmName to domain..."
-        Join-Domain -vmName $vmName
+        try {
+            Write-Host "Joining $vmName to domain..."
+            Join-Domain -vmName $vmName
+            Write-Host "$vmName joined to domain successfully."
+        }
+        catch {
+            Write-Host "Failed to join $vmName to domain. Error: $_"
+        }
     } else {
         Write-Host "Failed to configure DNS correctly for $vmName after $maxRetries attempts. Skipping domain join."
     }
 }
 
 # Configure DNS for RCA (standalone)
-Write-Host "Configuring DNS for lit-rca..."
-Configure-DNS -vmName "lit-rca" -dnsIP $vmConfigs[0].staticIP
+try {
+    Write-Host "Configuring DNS for lit-rca..."
+    Configure-DNS -vmName "lit-rca" -dnsIP $vmConfigs[0].staticIP
+    Write-Host "DNS configured successfully for lit-rca."
+}
+catch {
+    Write-Host "Failed to configure DNS for lit-rca. Error: $_"
+}
 
 Write-Host "PKI Lab setup completed. Remember to configure the CA and RCA roles manually on the respective VMs."
