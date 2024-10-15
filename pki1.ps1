@@ -5,9 +5,11 @@
 $user = "shumi"
 $pass = "YourSecurePassword123!" # Replace with a secure password
 $securePass = ConvertTo-SecureString $pass -AsPlainText -Force
-$resourceGroup = "rg-lit-PKILab-multi"
-$addressPrefix = "10.0.0.0/16"
-$subnetPrefix = "10.0.0.0/24"
+$resourceGroup = "rg-lit-PKILab"
+$locationUKSouth = "uksouth"
+$locationUKWest = "ukwest"
+$addressPrefixUKSouth = "10.0.0.0/16"
+$addressPrefixUKWest = "10.1.0.0/16"
 $domainName = "learnitlessons.com"
 $netbiosName = "LIT"
 
@@ -25,11 +27,12 @@ function Create-VMWithStaticIP {
         [string]$offer,
         [string]$skus,
         [string]$location,
-        [object]$subnet
+        [string]$vnetName
     )
 
+    $vnet = Get-AzVirtualNetwork -ResourceGroupName $resourceGroup -Name $vnetName
     $pip = New-AzPublicIpAddress -Name "$vmName-pip" -ResourceGroupName $resourceGroup -Location $location -AllocationMethod Static -Sku Standard
-    $nic = New-AzNetworkInterface -Name "$vmName-nic" -ResourceGroupName $resourceGroup -Location $location -SubnetId $subnet.Id -PublicIpAddressId $pip.Id -PrivateIpAddress $staticIP
+    $nic = New-AzNetworkInterface -Name "$vmName-nic" -ResourceGroupName $resourceGroup -Location $location -SubnetId $vnet.Subnets[0].Id -PublicIpAddressId $pip.Id -PrivateIpAddress $staticIP
     $nic.IpConfigurations[0].PrivateIpAllocationMethod = "Static"
     Set-AzNetworkInterface -NetworkInterface $nic
     $nsg = New-AzNetworkSecurityGroup -ResourceGroupName $resourceGroup -Location $location -Name "$vmName-nsg" -SecurityRules (New-AzNetworkSecurityRuleConfig -Name "RDP" -Protocol Tcp -Direction Inbound -Priority 1000 -SourceAddressPrefix * -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 3389 -Access Allow)
@@ -101,22 +104,22 @@ function Join-Domain {
 #================================
 
 # Create Resource Group
-New-AzResourceGroup -Name $resourceGroup -Location "uksouth" -Force
+New-AzResourceGroup -Name $resourceGroup -Location $locationUKSouth -Force
 
-# Create Virtual Network in UK South
-$vnet = New-AzVirtualNetwork -ResourceGroupName $resourceGroup -Location "uksouth" -Name "vnet-pkilab" -AddressPrefix $addressPrefix
-Add-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix $subnetPrefix -VirtualNetwork $vnet
-$vnet | Set-AzVirtualNetwork
+# Create Virtual Networks
+$vnetUKSouth = New-AzVirtualNetwork -ResourceGroupName $resourceGroup -Location $locationUKSouth -Name "vnet-pkilab-uksouth" -AddressPrefix $addressPrefixUKSouth -Subnet (New-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix ($addressPrefixUKSouth -replace '0/16', '0/24'))
+$vnetUKWest = New-AzVirtualNetwork -ResourceGroupName $resourceGroup -Location $locationUKWest -Name "vnet-pkilab-ukwest" -AddressPrefix $addressPrefixUKWest -Subnet (New-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix ($addressPrefixUKWest -replace '0/16', '0/24'))
 
-# Get the subnet reference
-$subnet = Get-AzVirtualNetworkSubnetConfig -VirtualNetwork $vnet -Name "default"
+# Set up VNet peering
+$peering1 = Add-AzVirtualNetworkPeering -Name "UKSouthToUKWest" -VirtualNetwork $vnetUKSouth -RemoteVirtualNetworkId $vnetUKWest.Id -AllowForwardedTraffic
+$peering2 = Add-AzVirtualNetworkPeering -Name "UKWestToUKSouth" -VirtualNetwork $vnetUKWest -RemoteVirtualNetworkId $vnetUKSouth.Id -AllowForwardedTraffic
 
 # Create VMs
-Create-VMWithStaticIP -vmName "lit-rca" -staticIP "10.0.0.4" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition" -location "ukwest" -subnet $subnet
-Create-VMWithStaticIP -vmName "lit-dc" -staticIP "10.0.0.5" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition" -location "uksouth" -subnet $subnet
-Create-VMWithStaticIP -vmName "lit-ca1" -staticIP "10.0.0.6" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition" -location "uksouth" -subnet $subnet
-Create-VMWithStaticIP -vmName "lit-ca2" -staticIP "10.0.0.7" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition" -location "uksouth" -subnet $subnet
-Create-VMWithStaticIP -vmName "lit-win10" -staticIP "10.0.0.8" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsDesktop" -offer "Windows-10" -skus "win10-21h2-pro" -location "uksouth" -subnet $subnet
+Create-VMWithStaticIP -vmName "lit-dc" -staticIP "10.0.0.4" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition" -location $locationUKSouth -vnetName "vnet-pkilab-uksouth"
+Create-VMWithStaticIP -vmName "lit-rca" -staticIP "10.1.0.4" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition" -location $locationUKWest -vnetName "vnet-pkilab-ukwest"
+Create-VMWithStaticIP -vmName "lit-ca1" -staticIP "10.0.0.5" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition" -location $locationUKSouth -vnetName "vnet-pkilab-uksouth"
+Create-VMWithStaticIP -vmName "lit-ca2" -staticIP "10.0.0.6" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition" -location $locationUKSouth -vnetName "vnet-pkilab-uksouth"
+Create-VMWithStaticIP -vmName "lit-win10" -staticIP "10.0.0.7" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsDesktop" -offer "Windows-10" -skus "win10-21h2-pro" -location $locationUKSouth -vnetName "vnet-pkilab-uksouth"
 
 # Install ADDS and promote DC
 Install-ADDSAndPromoteDC -vmName "lit-dc"
@@ -129,6 +132,11 @@ Join-Domain -vmName "lit-ca1"
 Join-Domain -vmName "lit-ca2"
 Join-Domain -vmName "lit-win10"
 
+# Configure DNS for RCA to use DC
+$rcaNic = Get-AzNetworkInterface -ResourceGroupName $resourceGroup -Name "lit-rca-nic"
+$rcaNic.DnsSettings.DnsServers.Add("10.0.0.4")
+Set-AzNetworkInterface -NetworkInterface $rcaNic
+
 #================================
 # 4. OUTPUT CONNECTION INFO
 #================================
@@ -139,4 +147,4 @@ Get-AzPublicIpAddress -ResourceGroupName $resourceGroup | ForEach-Object {
 
 Write-Host "Script execution completed."
 Write-Host "Remember to configure PKI roles on the appropriate VMs after deployment."
-Write-Host "Note: The RCA (lit-rca) is not domain-joined and is located in the UK West region."
+Write-Host "Note: The RCA (lit-rca) is not domain-joined but can communicate with the domain through VNet peering."
