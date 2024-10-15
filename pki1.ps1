@@ -3,7 +3,7 @@
 #================================
 # 1. BASIC SETTINGS
 #================================
-$location = "ukwest"
+$location = "uksouth"
 $resourceGroup = "rg-lit-PKILab"
 $addressPrefix = "10.0.0.0/16"
 $subnetPrefix = "10.0.0.0/24"
