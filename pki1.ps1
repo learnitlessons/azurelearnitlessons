@@ -249,14 +249,20 @@ function Create-VirtualNetworkWithRetry {
         try {
             $vnet = New-AzVirtualNetwork -ResourceGroupName $resourceGroup -Location $location -Name "vnet-pkilab" -AddressPrefix $addressPrefix
             $subnetConfig = Add-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix $subnetPrefix -VirtualNetwork $vnet
-            $vnet | Set-AzVirtualNetwork
+            $vnet = $vnet | Set-AzVirtualNetwork
 
-            # Refresh the $vnet object to get the updated configuration
-            $vnet = Get-AzVirtualNetwork -Name "vnet-pkilab" -ResourceGroupName $resourceGroup
-            return $vnet
+            # Verify the virtual network was created successfully
+            $createdVnet = Get-AzVirtualNetwork -Name "vnet-pkilab" -ResourceGroupName $resourceGroup -ErrorAction Stop
+            if ($createdVnet) {
+                Write-Host "Virtual network created and verified successfully."
+                return $createdVnet
+            } else {
+                throw "Virtual network not found after creation attempt."
+            }
         }
         catch {
-            Write-Host "Failed to create virtual network. Retrying in $retryDelay seconds..."
+            Write-Host "Failed to create or verify virtual network. Error: $_"
+            Write-Host "Retrying in $retryDelay seconds..."
             Start-Sleep -Seconds $retryDelay
             $retryCount++
         }
@@ -278,9 +284,24 @@ catch {
     return
 }
 
+# Verify subnet configuration
+$subnet = Get-AzVirtualNetworkSubnetConfig -Name "default" -VirtualNetwork $vnet
+if (-not $subnet) {
+    Write-Host "Subnet 'default' not found in the virtual network. Creating subnet..."
+    $subnet = Add-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix $subnetPrefix -VirtualNetwork $vnet
+    $vnet = $vnet | Set-AzVirtualNetwork
+    $subnet = Get-AzVirtualNetworkSubnetConfig -Name "default" -VirtualNetwork $vnet
+}
+
+if (-not $subnet) {
+    Write-Host "Failed to create or retrieve subnet. Exiting script."
+    return
+}
+
 # Create VMs
 foreach ($vm in $vmConfigs) {
     try {
+        Write-Host "Creating VM $($vm.name)..."
         Create-VM -vmName $vm.name -vmSize $vm.size -staticIP $vm.staticIP -role $vm.role
         Write-Host "VM $($vm.name) created successfully."
     }
