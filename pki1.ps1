@@ -57,8 +57,10 @@ function Create-VM {
         [string]$role
     )
 
+    $subnet = Get-AzVirtualNetworkSubnetConfig -Name "default" -VirtualNetwork $vnet
+    $nic = New-AzNetworkInterface -Name "$vmName-nic" -ResourceGroupName $resourceGroup -Location $location -SubnetId $subnet.Id -PrivateIpAddress $staticIP
+
     $vmConfig = New-AzVMConfig -VMName $vmName -VMSize $vmSize
-    $nic = New-AzNetworkInterface -Name "$vmName-nic" -ResourceGroupName $resourceGroup -Location $location -SubnetId $vnet.Subnets[0].Id -PrivateIpAddress $staticIP
     $vmConfig = Add-AzVMNetworkInterface -VM $vmConfig -Id $nic.Id
 
     if ($role -eq "Client") {
@@ -209,15 +211,18 @@ function Join-Domain {
     Invoke-AzVMRunCommand -ResourceGroupName $resourceGroup -VMName $vmName -CommandId 'RunPowerShellScript' -ScriptString $script
 }
 
-
+# Main script
 
 # Create resource group
-New-AzResourceGroup -Name $resourceGroup -Location $location
+New-AzResourceGroup -Name $resourceGroup -Location $location -Force
 
 # Create virtual network
 $vnet = New-AzVirtualNetwork -ResourceGroupName $resourceGroup -Location $location -Name "vnet-pkilab" -AddressPrefix $addressPrefix
-Add-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix $subnetPrefix -VirtualNetwork $vnet
+$subnetConfig = Add-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix $subnetPrefix -VirtualNetwork $vnet
 $vnet | Set-AzVirtualNetwork
+
+# Refresh the $vnet object to get the updated configuration
+$vnet = Get-AzVirtualNetwork -Name "vnet-pkilab" -ResourceGroupName $resourceGroup
 
 # Create VMs
 foreach ($vm in $vmConfigs) {
