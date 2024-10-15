@@ -6,8 +6,10 @@ $user = "shumi"
 $pass = "YourSecurePassword123!" # Replace with a secure password
 $securePass = ConvertTo-SecureString $pass -AsPlainText -Force
 $resourceGroup = "rg-lit-PKILab"
-$location = "centralindia"
-$addressPrefix = "10.0.0.0/16"
+$locationIndia = "centralindia"
+$locationUK = "ukwest"
+$addressPrefixIndia = "10.0.0.0/16"
+$addressPrefixUK = "10.1.0.0/16"
 $domainName = "learnitlessons.com"
 $netbiosName = "LIT"
 
@@ -23,9 +25,12 @@ function Create-VMWithStaticIP {
         [string]$vmSize,
         [string]$publisher,
         [string]$offer,
-        [string]$skus
+        [string]$skus,
+        [string]$location,
+        [string]$vnetName
     )
 
+    $vnet = Get-AzVirtualNetwork -Name $vnetName -ResourceGroupName $resourceGroup
     $pip = New-AzPublicIpAddress -Name "$vmName-pip" -ResourceGroupName $resourceGroup -Location $location -AllocationMethod Static -Sku Standard
     $nic = New-AzNetworkInterface -Name "$vmName-nic" -ResourceGroupName $resourceGroup -Location $location -SubnetId $vnet.Subnets[0].Id -PublicIpAddressId $pip.Id -PrivateIpAddress $staticIP
     $nic.IpConfigurations[0].PrivateIpAllocationMethod = "Static"
@@ -99,17 +104,20 @@ function Join-Domain {
 #================================
 
 # Create Resource Group
-New-AzResourceGroup -Name $resourceGroup -Location $location -Force
+New-AzResourceGroup -Name $resourceGroup -Location $locationIndia -Force
 
-# Create Virtual Network
-$vnet = New-AzVirtualNetwork -ResourceGroupName $resourceGroup -Location $location -Name "vnet-pkilab" -AddressPrefix $addressPrefix -Subnet (New-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix ($addressPrefix -replace '0/16', '0/24'))
+# Create Virtual Networks
+$vnetIndia = New-AzVirtualNetwork -ResourceGroupName $resourceGroup -Location $locationIndia -Name "vnet-pkilab-india" -AddressPrefix $addressPrefixIndia -Subnet (New-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix ($addressPrefixIndia -replace '0/16', '0/24'))
+$vnetUK = New-AzVirtualNetwork -ResourceGroupName $resourceGroup -Location $locationUK -Name "vnet-pkilab-uk" -AddressPrefix $addressPrefixUK -Subnet (New-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix ($addressPrefixUK -replace '0/16', '0/24'))
 
-# Create VMs
-Create-VMWithStaticIP -vmName "lit-dc" -staticIP "10.0.0.4" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition"
-Create-VMWithStaticIP -vmName "lit-rca" -staticIP "10.0.0.5" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition"
-Create-VMWithStaticIP -vmName "lit-ca1" -staticIP "10.0.0.6" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition"
-Create-VMWithStaticIP -vmName "lit-ca2" -staticIP "10.0.0.7" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition"
-Create-VMWithStaticIP -vmName "lit-win10" -staticIP "10.0.0.8" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsDesktop" -offer "Windows-10" -skus "win10-21h2-pro"
+# Create VMs in India
+Create-VMWithStaticIP -vmName "lit-dc" -staticIP "10.0.0.4" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition" -location $locationIndia -vnetName "vnet-pkilab-india"
+Create-VMWithStaticIP -vmName "lit-ca1" -staticIP "10.0.0.5" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition" -location $locationIndia -vnetName "vnet-pkilab-india"
+Create-VMWithStaticIP -vmName "lit-ca2" -staticIP "10.0.0.6" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition" -location $locationIndia -vnetName "vnet-pkilab-india"
+Create-VMWithStaticIP -vmName "lit-win10" -staticIP "10.0.0.7" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsDesktop" -offer "Windows-10" -skus "win10-21h2-pro" -location $locationIndia -vnetName "vnet-pkilab-india"
+
+# Create RCA VM in UK West
+Create-VMWithStaticIP -vmName "lit-rca" -staticIP "10.1.0.4" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition" -location $locationUK -vnetName "vnet-pkilab-uk"
 
 # Install ADDS and promote DC
 Install-ADDSAndPromoteDC -vmName "lit-dc"
@@ -117,11 +125,17 @@ Install-ADDSAndPromoteDC -vmName "lit-dc"
 # Wait for AD to be ready
 Start-Sleep -Seconds 300
 
-# Join other VMs to the domain
-Join-Domain -vmName "lit-rca"
+# Join other VMs to the domain (except RCA)
 Join-Domain -vmName "lit-ca1"
 Join-Domain -vmName "lit-ca2"
 Join-Domain -vmName "lit-win10"
+
+# Create VNet peering
+$vnetIndia = Get-AzVirtualNetwork -Name "vnet-pkilab-india" -ResourceGroupName $resourceGroup
+$vnetUK = Get-AzVirtualNetwork -Name "vnet-pkilab-uk" -ResourceGroupName $resourceGroup
+
+Add-AzVirtualNetworkPeering -Name "India-to-UK" -VirtualNetwork $vnetIndia -RemoteVirtualNetworkId $vnetUK.Id -AllowForwardedTraffic
+Add-AzVirtualNetworkPeering -Name "UK-to-India" -VirtualNetwork $vnetUK -RemoteVirtualNetworkId $vnetIndia.Id -AllowForwardedTraffic
 
 #================================
 # 4. OUTPUT CONNECTION INFO
@@ -133,3 +147,4 @@ Get-AzPublicIpAddress -ResourceGroupName $resourceGroup | ForEach-Object {
 
 Write-Host "Script execution completed."
 Write-Host "Remember to configure PKI roles on the appropriate VMs after deployment."
+Write-Host "Note: The RCA (lit-rca) is not domain-joined and is located in the UK West region."
