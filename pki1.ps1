@@ -1,150 +1,142 @@
 #================================
 # 1. BASIC SETTINGS
 #================================
-
 $user = "shumi"
 $pass = "YourSecurePassword123!" # Replace with a secure password
 $securePass = ConvertTo-SecureString $pass -AsPlainText -Force
 $resourceGroup = "rg-lit-PKILab"
-$locationUKSouth = "uksouth"
-$locationUKWest = "ukwest"
-$addressPrefixUKSouth = "10.0.0.0/16"
-$addressPrefixUKWest = "10.1.0.0/16"
 $domainName = "learnitlessons.com"
 $netbiosName = "LIT"
 
 #================================
-# 2. FUNCTION DEFINITIONS
+# 2. VM CONFIGURATIONS
+#================================
+$vms = @(
+    @{
+        name = "lit-dc"
+        location = "uksouth"
+        staticIP = "10.0.0.4"
+        role = "DC"
+    },
+    @{
+        name = "lit-rca"
+        location = "ukwest"
+        staticIP = "10.1.0.4"
+        role = "RCA"
+    },
+    @{
+        name = "lit-ca1"
+        location = "uksouth"
+        staticIP = "10.0.0.5"
+        role = "CA"
+    },
+    @{
+        name = "lit-ca2"
+        location = "uksouth"
+        staticIP = "10.0.0.6"
+        role = "CA"
+    },
+    @{
+        name = "lit-win10"
+        location = "uksouth"
+        staticIP = "10.0.0.7"
+        role = "Client"
+    }
+)
+
+#================================
+# 3. FUNCTIONS
 #================================
 
-# Function to create a VM with static IP
-function Create-VMWithStaticIP {
+# Function to create a VM
+function Create-VM {
     param (
-        [string]$vmName,
-        [string]$staticIP,
-        [string]$vmSize,
-        [string]$publisher,
-        [string]$offer,
-        [string]$skus,
-        [string]$location,
-        [string]$vnetName
+        [hashtable]$vmConfig
     )
 
-    $vnet = Get-AzVirtualNetwork -ResourceGroupName $resourceGroup -Name $vnetName
-    $pip = New-AzPublicIpAddress -Name "$vmName-pip" -ResourceGroupName $resourceGroup -Location $location -AllocationMethod Static -Sku Standard
-    $nic = New-AzNetworkInterface -Name "$vmName-nic" -ResourceGroupName $resourceGroup -Location $location -SubnetId $vnet.Subnets[0].Id -PublicIpAddressId $pip.Id -PrivateIpAddress $staticIP
-    $nic.IpConfigurations[0].PrivateIpAllocationMethod = "Static"
-    Set-AzNetworkInterface -NetworkInterface $nic
-    $nsg = New-AzNetworkSecurityGroup -ResourceGroupName $resourceGroup -Location $location -Name "$vmName-nsg" -SecurityRules (New-AzNetworkSecurityRuleConfig -Name "RDP" -Protocol Tcp -Direction Inbound -Priority 1000 -SourceAddressPrefix * -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 3389 -Access Allow)
-    $nic.NetworkSecurityGroup = $nsg
-    Set-AzNetworkInterface -NetworkInterface $nic
-    $vmConfig = New-AzVMConfig -VMName $vmName -VMSize $vmSize | 
-        Set-AzVMOperatingSystem -Windows -ComputerName $vmName -Credential (New-Object PSCredential($user, $securePass)) | 
-        Set-AzVMSourceImage -PublisherName $publisher -Offer $offer -Skus $skus -Version "latest" | 
-        Add-AzVMNetworkInterface -Id $nic.Id | 
-        Set-AzVMBootDiagnostic -Disable |
-        Set-AzVMOSDisk -CreateOption FromImage -StorageAccountType StandardSSD_LRS
-    New-AzVM -ResourceGroupName $resourceGroup -Location $location -VM $vmConfig
-
-    # Configure pagefile
-    $script = @"
-    `$computerSystem = Get-WmiObject -Class Win32_ComputerSystem -EnableAllPrivileges
-    if (-not `$computerSystem.AutomaticManagedPagefile) {
-        `$computerSystem.AutomaticManagedPagefile = `$true
-        `$computerSystem.Put()
+    $vnetName = "vnet-$($vmConfig.location)"
+    $vnet = Get-AzVirtualNetwork -Name $vnetName -ResourceGroupName $resourceGroup -ErrorAction SilentlyContinue
+    if (-not $vnet) {
+        $addressPrefix = if ($vmConfig.location -eq "uksouth") { "10.0.0.0/16" } else { "10.1.0.0/16" }
+        $vnet = New-AzVirtualNetwork -ResourceGroupName $resourceGroup -Location $vmConfig.location -Name $vnetName -AddressPrefix $addressPrefix
+        $vnet | Add-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix ($addressPrefix -replace '0/16', '0/24') | Set-AzVirtualNetwork
     }
-    Restart-Computer -Force
-"@
-    Invoke-AzVMRunCommand -ResourceGroupName $resourceGroup -VMName $vmName -CommandId 'RunPowerShellScript' -ScriptString $script
+
+    $pip = New-AzPublicIpAddress -Name "$($vmConfig.name)-pip" -ResourceGroupName $resourceGroup -Location $vmConfig.location -AllocationMethod Static -Sku Standard
+    $nic = New-AzNetworkInterface -Name "$($vmConfig.name)-nic" -ResourceGroupName $resourceGroup -Location $vmConfig.location -SubnetId $vnet.Subnets[0].Id -PublicIpAddressId $pip.Id -PrivateIpAddress $vmConfig.staticIP
+    $nsg = New-AzNetworkSecurityGroup -ResourceGroupName $resourceGroup -Location $vmConfig.location -Name "$($vmConfig.name)-nsg" -SecurityRules (New-AzNetworkSecurityRuleConfig -Name "RDP" -Protocol Tcp -Direction Inbound -Priority 1000 -SourceAddressPrefix * -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 3389 -Access Allow)
+    $nic.NetworkSecurityGroup = $nsg
+    $nic | Set-AzNetworkInterface
+
+    $vmSize = if ($vmConfig.role -eq "Client") { "Standard_B2s" } else { "Standard_B2ms" }
+    $imageOffer = if ($vmConfig.role -eq "Client") { "Windows-10" } else { "WindowsServer" }
+    $imageSku = if ($vmConfig.role -eq "Client") { "win10-21h2-pro" } else { "2022-Datacenter" }
+
+    $vmConfig = New-AzVMConfig -VMName $vmConfig.name -VMSize $vmSize | 
+        Set-AzVMOperatingSystem -Windows -ComputerName $vmConfig.name -Credential (New-Object PSCredential($user, $securePass)) | 
+        Set-AzVMSourceImage -PublisherName "MicrosoftWindowsServer" -Offer $imageOffer -Skus $imageSku -Version "latest" | 
+        Add-AzVMNetworkInterface -Id $nic.Id | 
+        Set-AzVMBootDiagnostic -Disable
+
+    New-AzVM -ResourceGroupName $resourceGroup -Location $vmConfig.location -VM $vmConfig
 }
 
-# Function to install ADDS and promote DC
-function Install-ADDSAndPromoteDC {
+# Function to configure DNS and join domain
+function Configure-VMNetwork {
     param (
-        [string]$vmName
+        [hashtable]$vmConfig
+    )
+
+    $script = @"
+    `$adapter = Get-NetAdapter | Where-Object { `$_.Status -eq 'Up' }
+    Set-DnsClientServerAddress -InterfaceIndex `$adapter.InterfaceIndex -ServerAddresses ("10.0.0.4")
+    if ("$($vmConfig.role)" -ne "DC" -and "$($vmConfig.role)" -ne "RCA") {
+        `$securePassword = ConvertTo-SecureString "$pass" -AsPlainText -Force
+        `$credential = New-Object System.Management.Automation.PSCredential ("$user@$domainName", `$securePassword)
+        Add-Computer -DomainName "$domainName" -Credential `$credential -Restart -Force
+    }
+"@
+
+    Invoke-AzVMRunCommand -ResourceGroupName $resourceGroup -VMName $vmConfig.name -CommandId 'RunPowerShellScript' -ScriptString $script
+}
+
+# Function to install ADDS and promote to DC
+function Install-ADDS {
+    param (
+        [hashtable]$vmConfig
     )
 
     $script = @"
     Install-WindowsFeature -Name AD-Domain-Services -IncludeManagementTools
-    Import-Module ADDSDeployment
-    `$securePassword = ConvertTo-SecureString '$pass' -AsPlainText -Force
-    Install-ADDSForest ``
-        -CreateDnsDelegation:`$false ``
-        -DatabasePath 'C:\Windows\NTDS' ``
-        -DomainMode 'WinThreshold' ``
-        -DomainName '$domainName' ``
-        -DomainNetbiosName '$netbiosName' ``
-        -ForestMode 'WinThreshold' ``
-        -InstallDns:`$true ``
-        -LogPath 'C:\Windows\NTDS' ``
-        -NoRebootOnCompletion:`$false ``
-        -SysvolPath 'C:\Windows\SYSVOL' ``
-        -Force:`$true ``
-        -SafeModeAdministratorPassword `$securePassword
+    `$securePassword = ConvertTo-SecureString "$pass" -AsPlainText -Force
+    Install-ADDSForest -DomainName "$domainName" -DomainNetbiosName "$netbiosName" -InstallDns -Force -SafeModeAdministratorPassword `$securePassword
 "@
-    Invoke-AzVMRunCommand -ResourceGroupName $resourceGroup -VMName $vmName -CommandId 'RunPowerShellScript' -ScriptString $script
-}
 
-# Function to join a VM to the domain
-function Join-Domain {
-    param (
-        [string]$vmName
-    )
-
-    $script = @"
-    `$securePassword = ConvertTo-SecureString '$pass' -AsPlainText -Force
-    `$credential = New-Object System.Management.Automation.PSCredential ('$domainName\$user', `$securePassword)
-    Add-Computer -DomainName $domainName -Credential `$credential -Restart -Force
-"@
-    Invoke-AzVMRunCommand -ResourceGroupName $resourceGroup -VMName $vmName -CommandId 'RunPowerShellScript' -ScriptString $script
+    Invoke-AzVMRunCommand -ResourceGroupName $resourceGroup -VMName $vmConfig.name -CommandId 'RunPowerShellScript' -ScriptString $script
 }
 
 #================================
-# 3. MAIN DEPLOYMENT
+# 4. MAIN SCRIPT
 #================================
 
 # Create Resource Group
-New-AzResourceGroup -Name $resourceGroup -Location $locationUKSouth -Force
-
-# Create Virtual Networks
-$vnetUKSouth = New-AzVirtualNetwork -ResourceGroupName $resourceGroup -Location $locationUKSouth -Name "vnet-pkilab-uksouth" -AddressPrefix $addressPrefixUKSouth -Subnet (New-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix ($addressPrefixUKSouth -replace '0/16', '0/24'))
-$vnetUKWest = New-AzVirtualNetwork -ResourceGroupName $resourceGroup -Location $locationUKWest -Name "vnet-pkilab-ukwest" -AddressPrefix $addressPrefixUKWest -Subnet (New-AzVirtualNetworkSubnetConfig -Name "default" -AddressPrefix ($addressPrefixUKWest -replace '0/16', '0/24'))
-
-# Set up VNet peering
-$peering1 = Add-AzVirtualNetworkPeering -Name "UKSouthToUKWest" -VirtualNetwork $vnetUKSouth -RemoteVirtualNetworkId $vnetUKWest.Id -AllowForwardedTraffic
-$peering2 = Add-AzVirtualNetworkPeering -Name "UKWestToUKSouth" -VirtualNetwork $vnetUKWest -RemoteVirtualNetworkId $vnetUKSouth.Id -AllowForwardedTraffic
+New-AzResourceGroup -Name $resourceGroup -Location "centralindia" -Force
 
 # Create VMs
-Create-VMWithStaticIP -vmName "lit-dc" -staticIP "10.0.0.4" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition" -location $locationUKSouth -vnetName "vnet-pkilab-uksouth"
-Create-VMWithStaticIP -vmName "lit-rca" -staticIP "10.1.0.4" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition" -location $locationUKWest -vnetName "vnet-pkilab-ukwest"
-Create-VMWithStaticIP -vmName "lit-ca1" -staticIP "10.0.0.5" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition" -location $locationUKSouth -vnetName "vnet-pkilab-uksouth"
-Create-VMWithStaticIP -vmName "lit-ca2" -staticIP "10.0.0.6" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsServer" -offer "WindowsServer" -skus "2022-datacenter-azure-edition" -location $locationUKSouth -vnetName "vnet-pkilab-uksouth"
-Create-VMWithStaticIP -vmName "lit-win10" -staticIP "10.0.0.7" -vmSize "Standard_B2s" -publisher "MicrosoftWindowsDesktop" -offer "Windows-10" -skus "win10-21h2-pro" -location $locationUKSouth -vnetName "vnet-pkilab-uksouth"
-
-# Install ADDS and promote DC
-Install-ADDSAndPromoteDC -vmName "lit-dc"
-
-# Wait for AD to be ready
-Start-Sleep -Seconds 300
-
-# Join other VMs to the domain (except RCA)
-Join-Domain -vmName "lit-ca1"
-Join-Domain -vmName "lit-ca2"
-Join-Domain -vmName "lit-win10"
-
-# Configure DNS for RCA to use DC
-$rcaNic = Get-AzNetworkInterface -ResourceGroupName $resourceGroup -Name "lit-rca-nic"
-$rcaNic.DnsSettings.DnsServers.Add("10.0.0.4")
-Set-AzNetworkInterface -NetworkInterface $rcaNic
-
-#================================
-# 4. OUTPUT CONNECTION INFO
-#================================
-
-Get-AzPublicIpAddress -ResourceGroupName $resourceGroup | ForEach-Object { 
-    Write-Output "VM: $($_.Name.Replace('-pip','')) Public IP: $($_.IpAddress) RDP: mstsc /v:$($_.IpAddress) /u:$user" 
+foreach ($vm in $vms) {
+    Write-Host "Creating VM: $($vm.name)"
+    Create-VM -vmConfig $vm
 }
 
-Write-Host "Script execution completed."
-Write-Host "Remember to configure PKI roles on the appropriate VMs after deployment."
-Write-Host "Note: The RCA (lit-rca) is not domain-joined but can communicate with the domain through VNet peering."
+# Configure DNS and join domain
+foreach ($vm in $vms) {
+    Write-Host "Configuring network for VM: $($vm.name)"
+    Configure-VMNetwork -vmConfig $vm
+}
+
+# Install ADDS and promote to DC
+$dcVM = $vms | Where-Object { $_.role -eq "DC" }
+Write-Host "Installing ADDS on $($dcVM.name)"
+Install-ADDS -vmConfig $dcVM
+
+Write-Host "Deployment completed. Please check the Azure portal for the status of your resources."
