@@ -1,182 +1,123 @@
-# Get current context
-$context = Get-AzContext
-$SubscriptionId = $context.Subscription.Id
-Write-Host "Using subscription: $SubscriptionId" -ForegroundColor Green
+# Login to Azure if needed (not required in Cloud Shell)
+# Connect-AzAccount
 
-# Variables
-$ResourceGroup = "rg-lit-ukw-AVDLab"
-$Location = "ukwest"
-$VnetName = "rg-lit-ukw-vnet"
-$SubnetName = "default"
-$HostPoolName = "rg-lit-ukw-hostpool1"
-$WorkspaceName = "rg-lit-ukw-workspace"
-$VMName = "lit-avd-pvm-0"
-$NICName = "lit-avd-pvm-0-nic"
-$AppGroupName = "rg-lit-ukw-hostpool1-DAG"
+# Variables for the deployment
+$SubscriptionId = (Get-AzContext).Subscription.Id
+$ResourceGroup = "rg-avd-prod"
+$Location = "eastus"
+$WorkspaceName = "ws-avd-prod"
+$HostPoolName = "hp-avd-prod"
+$AppGroupName = "ag-desktop-prod"
+$TestUserUPN = "jdoe@learnitlessonscoutlook.onmicrosoft.com"
 
-# VM Credentials
-$VMUsername = "shumi"
-$VMPasswordText = "YourSecurePassword123!"
-$VMPassword = ConvertTo-SecureString $VMPasswordText -AsPlainText -Force
-$VMCredential = New-Object System.Management.Automation.PSCredential ($VMUsername, $VMPassword)
+# Network settings
+$VNetName = "vnet-avd-prod"
+$SubnetName = "snet-avd-prod"
+$VNetAddressPrefix = "10.0.0.0/16"
+$SubnetAddressPrefix = "10.0.1.0/24"
 
-Write-Host "Starting AVD deployment in subscription: $SubscriptionId" -ForegroundColor Green
+# VM settings
+$VMSize = "Standard_D2s_v3"
+$VMCount = 1
+$VMPrefix = "vm-avd"
+$AdminUsername = "localadmin"
+# Generate a secure password - change this in production
+$AdminPassword = ConvertTo-SecureString "P@ssw0rd123!" -AsPlainText -Force
 
 # Create Resource Group
-Write-Host "Creating Resource Group..." -ForegroundColor Yellow
+Write-Host "Creating Resource Group..." -ForegroundColor Green
 New-AzResourceGroup -Name $ResourceGroup -Location $Location
 
 # Create Virtual Network and Subnet
-Write-Host "Creating Virtual Network and Subnet..." -ForegroundColor Yellow
-$SubnetConfig = New-AzVirtualNetworkSubnetConfig -Name $SubnetName -AddressPrefix "10.0.0.0/24"
-New-AzVirtualNetwork `
-    -ResourceGroupName $ResourceGroup `
-    -Location $Location `
-    -Name $VnetName `
-    -AddressPrefix "10.0.0.0/16" `
-    -Subnet $SubnetConfig
+Write-Host "Creating VNet and Subnet..." -ForegroundColor Green
+$SubnetConfig = New-AzVirtualNetworkSubnetConfig -Name $SubnetName -AddressPrefix $SubnetAddressPrefix
+$VNet = New-AzVirtualNetwork -ResourceGroupName $ResourceGroup -Location $Location `
+    -Name $VNetName -AddressPrefix $VNetAddressPrefix -Subnet $SubnetConfig
 
 # Create Host Pool
-Write-Host "Creating Host Pool..." -ForegroundColor Yellow
-New-AzWvdHostPool `
-    -ResourceGroupName $ResourceGroup `
+Write-Host "Creating Host Pool..." -ForegroundColor Green
+$HostPool = New-AzWvdHostPool -ResourceGroupName $ResourceGroup `
     -Name $HostPoolName `
     -Location $Location `
     -HostPoolType Pooled `
-    -LoadBalancerType DepthFirst `
+    -LoadBalancerType BreadthFirst `
     -PreferredAppGroupType Desktop `
-    -MaxSessionLimit 5 `
-    -ValidationEnvironment:$false
+    -ValidationEnvironment:$false `
+    -StartVMOnConnect:$true
 
 # Get Host Pool Registration Token
-$Token = New-AzWvdRegistrationInfo `
-    -ResourceGroupName $ResourceGroup `
+$RegistrationInfo = New-AzWvdRegistrationInfo -ResourceGroupName $ResourceGroup `
     -HostPoolName $HostPoolName `
-    -ExpiryTime $((Get-Date).AddHours(2))
+    -ExpiryTime $((get-date).ToUniversalTime().AddDays(1).ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ'))
 
-# Create Session Host VM
-Write-Host "Creating Session Host VM..." -ForegroundColor Yellow
-$VMConfig = New-AzVMConfig -VMName $VMName -VMSize "Standard_D4s_v5"
-$VMConfig = Set-AzVMOperatingSystem `
-    -VM $VMConfig `
-    -Windows `
-    -ComputerName $VMName `
-    -Credential $VMCredential `
-    -ProvisionVMAgent
-
-$VMConfig = Set-AzVMSourceImage `
-    -VM $VMConfig `
-    -PublisherName "MicrosoftWindowsDesktop" `
-    -Offer "office-365" `
-    -Skus "win11-23h2-avd-m365" `
-    -Version "latest"
-
-$Vnet = Get-AzVirtualNetwork -Name $VnetName -ResourceGroupName $ResourceGroup
-$Subnet = Get-AzVirtualNetworkSubnetConfig -Name $SubnetName -VirtualNetwork $Vnet
-
-$NIC = New-AzNetworkInterface `
-    -Name $NICName `
-    -ResourceGroupName $ResourceGroup `
+# Create Application Group
+Write-Host "Creating Application Group..." -ForegroundColor Green
+$AppGroup = New-AzWvdApplicationGroup -ResourceGroupName $ResourceGroup `
+    -Name $AppGroupName `
     -Location $Location `
-    -SubnetId $Subnet.Id
-
-$VMConfig = Add-AzVMNetworkInterface -VM $VMConfig -Id $NIC.Id
-
-New-AzVM `
-    -ResourceGroupName $ResourceGroup `
-    -Location $Location `
-    -VM $VMConfig
-
-# Install AVD Agent and register to Host Pool
-Write-Host "Installing AVD Agent and registering to Host Pool..." -ForegroundColor Yellow
-$ScriptContent = @"
-`$RegistrationToken = '$($Token.Token)'
-`$LocalPath = 'C:\AVD'
-New-Item -Path `$LocalPath -ItemType Directory -Force
-Invoke-WebRequest -Uri 'https://query.prod.cms.rt.microsoft.com/cms/api/am/binary/RWrmXv' -OutFile `$LocalPath\Microsoft.RDInfra.RDAgent.Installer-x64.msi
-Start-Process -FilePath 'msiexec.exe' -ArgumentList '/i', "`$LocalPath\Microsoft.RDInfra.RDAgent.Installer-x64.msi", '/quiet', "REGISTRATIONTOKEN=`$RegistrationToken" -Wait
-Invoke-WebRequest -Uri 'https://query.prod.cms.rt.microsoft.com/cms/api/am/binary/RWrxrH' -OutFile `$LocalPath\Microsoft.RDInfra.RDAgentBootLoader.Installer-x64.msi
-Start-Process -FilePath 'msiexec.exe' -ArgumentList '/i', "`$LocalPath\Microsoft.RDInfra.RDAgentBootLoader.Installer-x64.msi", '/quiet' -Wait
-"@
-
-Invoke-AzVMRunCommand `
-    -ResourceGroupName $ResourceGroup `
-    -VMName $VMName `
-    -CommandId 'RunPowerShellScript' `
-    -ScriptString $ScriptContent
+    -HostPoolArmPath $HostPool.Id `
+    -ApplicationGroupType Desktop
 
 # Create Workspace
-Write-Host "Creating Workspace..." -ForegroundColor Yellow
-New-AzWvdWorkspace `
-    -ResourceGroupName $ResourceGroup `
+Write-Host "Creating Workspace..." -ForegroundColor Green
+$Workspace = New-AzWvdWorkspace -ResourceGroupName $ResourceGroup `
     -Name $WorkspaceName `
-    -Location $Location `
-    -FriendlyName "LIT AVD Workspace"
-
-# Get the Application Group
-Write-Host "Getting Application Group..." -ForegroundColor Yellow
-$AppGroup = Get-AzWvdApplicationGroup `
-    -ResourceGroupName $ResourceGroup | Select-Object -First 1
+    -Location $Location
 
 # Associate Application Group with Workspace
-Write-Host "Associating Application Group with Workspace..." -ForegroundColor Yellow
-Register-AzWvdApplicationGroup `
-    -ResourceGroupName $ResourceGroup `
+Write-Host "Associating Application Group with Workspace..." -ForegroundColor Green
+$WorkspaceId = $Workspace.Id
+Register-AzWvdApplicationGroup -ResourceGroupName $ResourceGroup `
     -WorkspaceName $WorkspaceName `
     -ApplicationGroupPath $AppGroup.Id
 
-# Configure Auto-scaling
-Write-Host "Configuring Auto-scaling..." -ForegroundColor Yellow
-$AutoscaleSettings = @{
-    Location = $Location
-    Name = "lit-avd-autoscale"
-    ResourceGroupName = $ResourceGroup
-    TargetResourceId = (Get-AzVM -ResourceGroupName $ResourceGroup -Name $VMName).Id
-    Profiles = @(
-        @{
-            Name = "Default"
-            Capacity = @{
-                Minimum = "1"
-                Maximum = "4"
-                Default = "1"
-            }
-            Rules = @(
-                @{
-                    MetricTrigger = @{
-                        MetricName = "TimeOfDay"
-                        MetricResourceId = (Get-AzVM -ResourceGroupName $ResourceGroup -Name $VMName).Id
-                        TimeGrain = "PT1M"
-                        Statistic = "Average"
-                        TimeWindow = "PT5M"
-                        TimeAggregation = "Average"
-                        Operator = "GreaterThanOrEqual"
-                        Threshold = 9
-                    }
-                    ScaleAction = @{
-                        Direction = "Increase"
-                        Type = "ChangeCount"
-                        Value = "1"
-                        Cooldown = "PT5M"
-                    }
-                }
-            )
-        }
-    )
+# Assign test user to Application Group
+Write-Host "Assigning test user to Application Group..." -ForegroundColor Green
+$UserObjectId = (Get-AzADUser -UserPrincipalName $TestUserUPN).Id
+New-AzRoleAssignment -ObjectId $UserObjectId `
+    -RoleDefinitionName "Desktop Virtualization User" `
+    -ResourceName $AppGroupName `
+    -ResourceGroupName $ResourceGroup `
+    -ResourceType 'Microsoft.DesktopVirtualization/applicationGroups'
+
+# Create Session Host VMs
+Write-Host "Creating Session Host VMs..." -ForegroundColor Green
+for ($i = 1; $i -le $VMCount; $i++) {
+    $VMName = "$VMPrefix-$i"
+    
+    # Create NIC
+    $NIC = New-AzNetworkInterface -Name "$VMName-nic" `
+        -ResourceGroupName $ResourceGroup `
+        -Location $Location `
+        -SubnetId $VNet.Subnets[0].Id
+
+    # Create VM Config
+    $VMConfig = New-AzVMConfig -VMName $VMName -VMSize $VMSize
+    $VMConfig = Set-AzVMOperatingSystem -VM $VMConfig `
+        -Windows `
+        -ComputerName $VMName `
+        -Credential (New-Object PSCredential ($AdminUsername, $AdminPassword))
+    $VMConfig = Set-AzVMSourceImage -VM $VMConfig `
+        -PublisherName 'MicrosoftWindowsDesktop' `
+        -Offer 'windows-10' `
+        -Skus '21h1-evd' `
+        -Version latest
+    $VMConfig = Add-AzVMNetworkInterface -VM $VMConfig -Id $NIC.Id
+
+    # Create VM
+    Write-Host "Creating VM $VMName..." -ForegroundColor Green
+    New-AzVM -ResourceGroupName $ResourceGroup -Location $Location -VM $VMConfig
+
+    # Install AVD Agent and register with Host Pool
+    # Note: In a production environment, you would typically use Custom Script Extension or Azure Automation for this
+    Write-Host "Note: You will need to manually install the AVD agent on the VM and register it with the Host Pool using the following token:" -ForegroundColor Yellow
+    Write-Host $RegistrationInfo.Token -ForegroundColor Yellow
 }
 
-New-AzAutoscaleSetting @AutoscaleSettings
-
-Write-Host "AVD deployment complete!" -ForegroundColor Green
-
-# Output deployment summary
-Write-Host "=== Deployment Summary ===" -ForegroundColor Cyan
-Write-Host "Subscription: $SubscriptionId"
-Write-Host "Resource Group: $ResourceGroup"
-Write-Host "Host Pool: $HostPoolName"
-Write-Host "Workspace: $WorkspaceName"
-Write-Host "Virtual Network: $VnetName"
-Write-Host "VM Name: $VMName"
-Write-Host "NIC Name: $NICName"
-Write-Host "Application Group: $AppGroupName"
-Write-Host "Location: $Location"
-Write-Host "Username: $VMUsername"
+Write-Host "`nDeployment Complete!" -ForegroundColor Green
+Write-Host "`nImportant Next Steps:" -ForegroundColor Yellow
+Write-Host "1. Install the AVD Agent on each VM" -ForegroundColor Yellow
+Write-Host "2. Register each VM with the Host Pool using the token provided" -ForegroundColor Yellow
+Write-Host "3. Test connection using: https://client.wvd.microsoft.com/arm/webclient/index.html" -ForegroundColor Yellow
+Write-Host "4. Update the local admin password in production" -ForegroundColor Yellow
+Write-Host "5. Configure any additional security settings as needed" -ForegroundColor Yellow
