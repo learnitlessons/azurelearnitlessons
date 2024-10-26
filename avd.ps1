@@ -1,23 +1,23 @@
 # Variables for the deployment
 $SubscriptionId = (Get-AzContext).Subscription.Id
-$ResourceGroup = "rg-avd-prod2"
+$ResourceGroup = "rg-avd-prod3"
 $Location = "eastus"
-$WorkspaceName = "ws-avd-prod2"
-$HostPoolName = "hp-avd-prod2"
-$AppGroupName = "ag-desktop-prod2"
+$WorkspaceName = "ws-avd-prod3"
+$HostPoolName = "hp-avd-prod3"
+$AppGroupName = "ag-desktop-prod3"
 $TestUserUPN = "jdoe@learnitlessonscoutlook.onmicrosoft.com"
 
 # Network settings
-$VNetName = "vnet-avd-prod2"
-$SubnetName = "snet-avd-prod2"
+$VNetName = "vnet-avd-prod3"
+$SubnetName = "snet-avd-prod3"
 $VNetAddressPrefix = "10.0.0.0/16"
 $SubnetAddressPrefix = "10.0.1.0/24"
-$NSGName = "nsg-avd-prod2"
+$NSGName = "nsg-avd-prod3"
 
 # VM settings
-$VMSize = "Standard_D2s_v3"
+$VMSize = "Standard_B2ms"  # Changed from D2s_v3 to B2ms as it's more likely to be available
 $VMCount = 1
-$VMPrefix = "vm-avd2"
+$VMPrefix = "vm-avd3"
 $AdminUsername = "localadmin"
 $AdminPassword = ConvertTo-SecureString "P@ssw0rd123!" -AsPlainText -Force
 
