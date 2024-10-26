@@ -46,9 +46,9 @@ $HostPool = New-AzWvdHostPool -ResourceGroupName $ResourceGroup `
     -StartVMOnConnect:$true
 
 # Get Host Pool Registration Token
-$RegistrationInfo = New-AzWvdRegistrationInfo -ResourceGroupName $ResourceGroup `
+$Token = New-AzWvdRegistrationInfo -ResourceGroupName $ResourceGroup `
     -HostPoolName $HostPoolName `
-    -ExpiryTime $((get-date).ToUniversalTime().AddDays(1).ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ'))
+    -ExpirationTime $((get-date).ToUniversalTime().AddDays(1).ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ'))
 
 # Create Application Group
 Write-Host "Creating Application Group..." -ForegroundColor Green
@@ -111,7 +111,7 @@ for ($i = 1; $i -le $VMCount; $i++) {
     # Install AVD Agent and register with Host Pool
     # Note: In a production environment, you would typically use Custom Script Extension or Azure Automation for this
     Write-Host "Note: You will need to manually install the AVD agent on the VM and register it with the Host Pool using the following token:" -ForegroundColor Yellow
-    Write-Host $RegistrationInfo.Token -ForegroundColor Yellow
+    Write-Host $Token.Token -ForegroundColor Yellow
 }
 
 Write-Host "`nDeployment Complete!" -ForegroundColor Green
