@@ -1,23 +1,23 @@
 # Variables for the deployment
 $SubscriptionId = (Get-AzContext).Subscription.Id
-$ResourceGroup = "rg-avd-prod3"
-$Location = "eastus"
-$WorkspaceName = "ws-avd-prod3"
-$HostPoolName = "hp-avd-prod3"
-$AppGroupName = "ag-desktop-prod3"
+$ResourceGroup = "rg-avd-prod4"
+$Location = "uksouth"  # Changed to UK South
+$WorkspaceName = "ws-avd-prod4"
+$HostPoolName = "hp-avd-prod4"
+$AppGroupName = "ag-desktop-prod4"
 $TestUserUPN = "jdoe@learnitlessonscoutlook.onmicrosoft.com"
 
 # Network settings
-$VNetName = "vnet-avd-prod3"
-$SubnetName = "snet-avd-prod3"
+$VNetName = "vnet-avd-prod4"
+$SubnetName = "snet-avd-prod4"
 $VNetAddressPrefix = "10.0.0.0/16"
 $SubnetAddressPrefix = "10.0.1.0/24"
-$NSGName = "nsg-avd-prod3"
+$NSGName = "nsg-avd-prod4"
 
 # VM settings
-$VMSize = "Standard_B2ms"  # Changed from D2s_v3 to B2ms as it's more likely to be available
+$VMSize = "Standard_D2s_v5"  # Changed to newer generation VM size typically available in UK South
 $VMCount = 1
-$VMPrefix = "vm-avd3"
+$VMPrefix = "vm-avd4"
 $AdminUsername = "localadmin"
 $AdminPassword = ConvertTo-SecureString "P@ssw0rd123!" -AsPlainText -Force
 
