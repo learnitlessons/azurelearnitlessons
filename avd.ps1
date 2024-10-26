@@ -1,38 +1,42 @@
-# Login to Azure if needed (not required in Cloud Shell)
-# Connect-AzAccount
-
 # Variables for the deployment
 $SubscriptionId = (Get-AzContext).Subscription.Id
-$ResourceGroup = "rg-avd-prod"
+$ResourceGroup = "rg-avd-prod1"
 $Location = "eastus"
-$WorkspaceName = "ws-avd-prod"
-$HostPoolName = "hp-avd-prod"
-$AppGroupName = "ag-desktop-prod"
+$WorkspaceName = "ws-avd-prod1"
+$HostPoolName = "hp-avd-prod1"
+$AppGroupName = "ag-desktop-prod1"
 $TestUserUPN = "jdoe@learnitlessonscoutlook.onmicrosoft.com"
 
 # Network settings
-$VNetName = "vnet-avd-prod"
-$SubnetName = "snet-avd-prod"
+$VNetName = "vnet-avd-prod1"
+$SubnetName = "snet-avd-prod1"
 $VNetAddressPrefix = "10.0.0.0/16"
 $SubnetAddressPrefix = "10.0.1.0/24"
+$NSGName = "nsg-avd-prod1"
 
 # VM settings
 $VMSize = "Standard_D2s_v3"
 $VMCount = 1
-$VMPrefix = "vm-avd"
+$VMPrefix = "vm-avd1"
 $AdminUsername = "localadmin"
-# Generate a secure password - change this in production
 $AdminPassword = ConvertTo-SecureString "P@ssw0rd123!" -AsPlainText -Force
 
 # Create Resource Group
 Write-Host "Creating Resource Group..." -ForegroundColor Green
-New-AzResourceGroup -Name $ResourceGroup -Location $Location
+New-AzResourceGroup -Name $ResourceGroup -Location $Location -Force
+
+# Create NSG
+Write-Host "Creating Network Security Group..." -ForegroundColor Green
+$nsg = New-AzNetworkSecurityGroup -Name $NSGName -ResourceGroupName $ResourceGroup -Location $Location
 
 # Create Virtual Network and Subnet
 Write-Host "Creating VNet and Subnet..." -ForegroundColor Green
-$SubnetConfig = New-AzVirtualNetworkSubnetConfig -Name $SubnetName -AddressPrefix $SubnetAddressPrefix
-$VNet = New-AzVirtualNetwork -ResourceGroupName $ResourceGroup -Location $Location `
-    -Name $VNetName -AddressPrefix $VNetAddressPrefix -Subnet $SubnetConfig
+$subnet = New-AzVirtualNetworkSubnetConfig -Name $SubnetName -AddressPrefix $SubnetAddressPrefix -NetworkSecurityGroup $nsg
+$vnet = New-AzVirtualNetwork -ResourceGroupName $ResourceGroup -Location $Location `
+    -Name $VNetName -AddressPrefix $VNetAddressPrefix -Subnet $subnet
+    
+# Get updated subnet configuration
+$subnet = Get-AzVirtualNetworkSubnetConfig -VirtualNetwork $vnet -Name $SubnetName
 
 # Create Host Pool
 Write-Host "Creating Host Pool..." -ForegroundColor Green
@@ -85,39 +89,44 @@ Write-Host "Creating Session Host VMs..." -ForegroundColor Green
 for ($i = 1; $i -le $VMCount; $i++) {
     $VMName = "$VMPrefix-$i"
     
-    # Create NIC
-    $NIC = New-AzNetworkInterface -Name "$VMName-nic" `
-        -ResourceGroupName $ResourceGroup `
-        -Location $Location `
-        -SubnetId $VNet.Subnets[0].Id
+    # Create public IP
+    $pip = New-AzPublicIpAddress -Name "$VMName-pip" -ResourceGroupName $ResourceGroup -Location $Location -AllocationMethod Dynamic
 
-    # Create VM Config
-    $VMConfig = New-AzVMConfig -VMName $VMName -VMSize $VMSize
-    $VMConfig = Set-AzVMOperatingSystem -VM $VMConfig `
-        -Windows `
-        -ComputerName $VMName `
-        -Credential (New-Object PSCredential ($AdminUsername, $AdminPassword))
-    $VMConfig = Set-AzVMSourceImage -VM $VMConfig `
+    # Create NIC
+    $nicName = "$VMName-nic"
+    $nic = New-AzNetworkInterface -Name $nicName -ResourceGroupName $ResourceGroup -Location $Location `
+        -SubnetId $subnet.Id -PublicIpAddressId $pip.Id
+
+    # Create VM configuration
+    $vmConfig = New-AzVMConfig -VMName $VMName -VMSize $VMSize
+    
+    # Set OS configuration
+    $vmConfig = Set-AzVMOperatingSystem -VM $vmConfig -Windows -ComputerName $VMName `
+        -Credential (New-Object PSCredential ($AdminUsername, $AdminPassword)) -ProvisionVMAgent -EnableAutoUpdate
+    
+    # Set source image
+    $vmConfig = Set-AzVMSourceImage -VM $vmConfig `
         -PublisherName 'MicrosoftWindowsDesktop' `
         -Offer 'windows-10' `
         -Skus '21h1-evd' `
         -Version latest
-    $VMConfig = Add-AzVMNetworkInterface -VM $VMConfig -Id $NIC.Id
+    
+    # Add NIC
+    $vmConfig = Add-AzVMNetworkInterface -VM $vmConfig -Id $nic.Id -Primary
+    
+    # Add OS disk
+    $vmConfig = Set-AzVMOSDisk -VM $vmConfig -CreateOption FromImage -Windows
 
-    # Create VM
+    # Create the VM
     Write-Host "Creating VM $VMName..." -ForegroundColor Green
-    New-AzVM -ResourceGroupName $ResourceGroup -Location $Location -VM $VMConfig
-
-    # Install AVD Agent and register with Host Pool
-    # Note: In a production environment, you would typically use Custom Script Extension or Azure Automation for this
-    Write-Host "Note: You will need to manually install the AVD agent on the VM and register it with the Host Pool using the following token:" -ForegroundColor Yellow
-    Write-Host $Token.Token -ForegroundColor Yellow
+    New-AzVM -ResourceGroupName $ResourceGroup -Location $Location -VM $vmConfig
 }
 
 Write-Host "`nDeployment Complete!" -ForegroundColor Green
+Write-Host "`nHost Pool Registration Token: $($Token.Token)" -ForegroundColor Yellow
 Write-Host "`nImportant Next Steps:" -ForegroundColor Yellow
 Write-Host "1. Install the AVD Agent on each VM" -ForegroundColor Yellow
-Write-Host "2. Register each VM with the Host Pool using the token provided" -ForegroundColor Yellow
+Write-Host "2. Register each VM with the Host Pool using the token provided above" -ForegroundColor Yellow
 Write-Host "3. Test connection using: https://client.wvd.microsoft.com/arm/webclient/index.html" -ForegroundColor Yellow
 Write-Host "4. Update the local admin password in production" -ForegroundColor Yellow
 Write-Host "5. Configure any additional security settings as needed" -ForegroundColor Yellow
