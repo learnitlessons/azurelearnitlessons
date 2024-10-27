@@ -1,7 +1,7 @@
-# Variables for naming
+# Variables for the deployment
 $SubscriptionId = (Get-AzContext).Subscription.Id
-$Location = "uksouth"
 $ResourceGroup = "rg-avd-prod4"
+$Location = "uksouth"
 $WorkspaceName = "ws-avd-prod4"
 $HostPoolName = "hp-avd-prod4"
 $AppGroupName = "ag-desktop-prod4"
@@ -9,68 +9,95 @@ $VNetName = "vnet-avd-prod4"
 $SubnetName = "snet-avd-prod4"
 $NSGName = "nsg-avd-prod4"
 $VMPrefix = "vm-avd4"
+$UserName = "jdoe@learnitlessonscoutlook.onmicrosoft.com"
 
-# Prerequisites Check
-Write-Host "Checking and setting up prerequisites..." -ForegroundColor Green
+# Network settings
+$VNetAddressPrefix = "10.0.0.0/16"
+$SubnetAddressPrefix = "10.0.1.0/24"
 
-# 1. Check Azure PowerShell Modules
-$requiredModules = @(
-    "Az.DesktopVirtualization",
-    "Az.Network",
-    "Az.Compute",
-    "Az.Resources"
-)
-
-foreach ($module in $requiredModules) {
-    if (!(Get-Module -ListAvailable -Name $module)) {
-        Write-Host "Installing $module module..." -ForegroundColor Yellow
-        Install-Module -Name $module -Force -AllowClobber
-    }
-}
-
-# 2. Register Required Resource Providers
-Write-Host "Registering required resource providers..." -ForegroundColor Green
-Register-AzResourceProvider -ProviderNamespace "Microsoft.DesktopVirtualization"
-Register-AzResourceProvider -ProviderNamespace "Microsoft.Network"
-Register-AzResourceProvider -ProviderNamespace "Microsoft.Compute"
-
-# Wait for registration to complete
-do {
-    $rp = Get-AzResourceProvider -ProviderNamespace "Microsoft.DesktopVirtualization"
-    Write-Host "Waiting for resource provider registration..." -ForegroundColor Yellow
-    Start-Sleep -Seconds 10
-} while ($rp.RegistrationState -ne "Registered")
+# VM settings
+$VMSize = "Standard_D2s_v5"
+$VMCount = 1
+$AdminUsername = "localadmin"
+$AdminPassword = ConvertTo-SecureString "P@ssw0rd123!" -AsPlainText -Force
 
 # Create Resource Group
 Write-Host "Creating Resource Group..." -ForegroundColor Green
 New-AzResourceGroup -Name $ResourceGroup -Location $Location -Force
 
-# Network Setup
-Write-Host "Setting up networking components..." -ForegroundColor Green
+# Create NSG with required rules
+Write-Host "Creating Network Security Group..." -ForegroundColor Green
+$nsgRules = @(
+    @{
+        Name = 'Allow-RDP'
+        Protocol = 'Tcp'
+        Direction = 'Inbound'
+        Priority = 100
+        SourceAddressPrefix = 'Internet'
+        SourcePortRange = '*'
+        DestinationAddressPrefix = '*'
+        DestinationPortRange = '3389'
+        Access = 'Allow'
+    },
+    @{
+        Name = 'Allow-HTTP'
+        Protocol = 'Tcp'
+        Direction = 'Inbound'
+        Priority = 110
+        SourceAddressPrefix = 'Internet'
+        SourcePortRange = '*'
+        DestinationAddressPrefix = '*'
+        DestinationPortRange = '80'
+        Access = 'Allow'
+    },
+    @{
+        Name = 'Allow-HTTPS'
+        Protocol = 'Tcp'
+        Direction = 'Inbound'
+        Priority = 120
+        SourceAddressPrefix = 'Internet'
+        SourcePortRange = '*'
+        DestinationAddressPrefix = '*'
+        DestinationPortRange = '443'
+        Access = 'Allow'
+    },
+    @{
+        Name = 'Allow-SSH'
+        Protocol = 'Tcp'
+        Direction = 'Inbound'
+        Priority = 130
+        SourceAddressPrefix = 'Internet'
+        SourcePortRange = '*'
+        DestinationAddressPrefix = '*'
+        DestinationPortRange = '22'
+        Access = 'Allow'
+    }
+)
 
-# Create NSG with RDP rule
-$rdpRule = New-AzNetworkSecurityRuleConfig -Name 'Allow-RDP' -Description 'Allow RDP' `
-    -Access Allow -Protocol Tcp -Direction Inbound -Priority 100 `
-    -SourceAddressPrefix Internet -SourcePortRange * `
-    -DestinationAddressPrefix * -DestinationPortRange 3389
+$nsgRuleConfig = @()
+foreach ($rule in $nsgRules) {
+    $nsgRuleConfig += New-AzNetworkSecurityRuleConfig @rule
+}
 
 $nsg = New-AzNetworkSecurityGroup -Name $NSGName -ResourceGroupName $ResourceGroup `
-    -Location $Location -SecurityRules $rdpRule
+    -Location $Location -SecurityRules $nsgRuleConfig
 
-# Create VNet and Subnet
-$subnet = New-AzVirtualNetworkSubnetConfig -Name $SubnetName -AddressPrefix "10.0.1.0/24" -NetworkSecurityGroup $nsg
+# Create Virtual Network and Subnet
+Write-Host "Creating VNet and Subnet..." -ForegroundColor Green
+$subnet = New-AzVirtualNetworkSubnetConfig -Name $SubnetName -AddressPrefix $SubnetAddressPrefix -NetworkSecurityGroup $nsg
 $vnet = New-AzVirtualNetwork -ResourceGroupName $ResourceGroup -Location $Location `
-    -Name $VNetName -AddressPrefix "10.0.0.0/16" -Subnet $subnet
+    -Name $VNetName -AddressPrefix $VNetAddressPrefix -Subnet $subnet
 
 # Create Host Pool
 Write-Host "Creating Host Pool..." -ForegroundColor Green
-$hostPool = New-AzWvdHostPool -ResourceGroupName $ResourceGroup `
+$HostPool = New-AzWvdHostPool -ResourceGroupName $ResourceGroup `
     -Name $HostPoolName `
     -Location $Location `
     -HostPoolType Pooled `
     -LoadBalancerType BreadthFirst `
     -PreferredAppGroupType Desktop `
     -ValidationEnvironment:$false `
+    -MaxSessionLimit 2 `
     -StartVMOnConnect:$true
 
 # Get Host Pool Registration Token
@@ -80,15 +107,15 @@ $Token = New-AzWvdRegistrationInfo -ResourceGroupName $ResourceGroup `
 
 # Create Application Group
 Write-Host "Creating Application Group..." -ForegroundColor Green
-$appGroup = New-AzWvdApplicationGroup -ResourceGroupName $ResourceGroup `
+$AppGroup = New-AzWvdApplicationGroup -ResourceGroupName $ResourceGroup `
     -Name $AppGroupName `
     -Location $Location `
-    -HostPoolArmPath $hostPool.Id `
+    -HostPoolArmPath $HostPool.Id `
     -ApplicationGroupType Desktop
 
 # Create Workspace
 Write-Host "Creating Workspace..." -ForegroundColor Green
-$workspace = New-AzWvdWorkspace -ResourceGroupName $ResourceGroup `
+$Workspace = New-AzWvdWorkspace -ResourceGroupName $ResourceGroup `
     -Name $WorkspaceName `
     -Location $Location
 
@@ -96,60 +123,88 @@ $workspace = New-AzWvdWorkspace -ResourceGroupName $ResourceGroup `
 Write-Host "Associating Application Group with Workspace..." -ForegroundColor Green
 Register-AzWvdApplicationGroup -ResourceGroupName $ResourceGroup `
     -WorkspaceName $WorkspaceName `
-    -ApplicationGroupPath $appGroup.Id
+    -ApplicationGroupPath $AppGroup.Id
 
-# Create Session Host VM
-Write-Host "Creating Session Host VM..." -ForegroundColor Green
-$VMSize = "Standard_D2s_v5"
-$VMName = "$VMPrefix-1"
-$AdminUsername = "localadmin"
-$AdminPassword = ConvertTo-SecureString "P@ssw0rd123!" -AsPlainText -Force
+# Assign test user to Application Group
+Write-Host "Assigning test user to Application Group..." -ForegroundColor Green
+$UserObjectId = (Get-AzADUser -UserPrincipalName $UserName).Id
+New-AzRoleAssignment -ObjectId $UserObjectId `
+    -RoleDefinitionName "Desktop Virtualization User" `
+    -ResourceName $AppGroupName `
+    -ResourceGroupName $ResourceGroup `
+    -ResourceType 'Microsoft.DesktopVirtualization/applicationGroups'
 
-# Create public IP
-$pipConfig = @{
-    Name = "$VMName-pip"
-    ResourceGroupName = $ResourceGroup
-    Location = $Location
-    Sku = "Standard"
-    AllocationMethod = "Static"
+# Add VM User Login Role Assignment
+New-AzRoleAssignment -ObjectId $UserObjectId `
+    -RoleDefinitionName "Virtual Machine User Login" `
+    -ResourceGroupName $ResourceGroup
+
+# Create Session Host VMs
+Write-Host "Creating Session Host VMs..." -ForegroundColor Green
+for ($i = 1; $i -le $VMCount; $i++) {
+    $VMName = "$VMPrefix-$i"
+    
+    # Create public IP with Static allocation
+    $pipConfig = @{
+        Name = "$VMName-pip"
+        ResourceGroupName = $ResourceGroup
+        Location = $Location
+        Sku = "Standard"
+        AllocationMethod = "Static"
+    }
+    $pip = New-AzPublicIpAddress @pipConfig
+
+    # Create NIC with proper subnet reference
+    $nicConfig = @{
+        Name = "$VMName-nic"
+        ResourceGroupName = $ResourceGroup
+        Location = $Location
+        SubnetId = $subnet.Id
+        PublicIpAddressId = $pip.Id
+        NetworkSecurityGroupId = $nsg.Id
+    }
+    $nic = New-AzNetworkInterface @nicConfig
+
+    # Create VM configuration
+    $vmConfig = New-AzVMConfig -VMName $VMName -VMSize $VMSize
+
+    # Set OS settings
+    $vmConfig = Set-AzVMOperatingSystem -VM $vmConfig `
+        -Windows `
+        -ComputerName $VMName `
+        -Credential (New-Object PSCredential ($AdminUsername, $AdminPassword)) `
+        -ProvisionVMAgent `
+        -EnableAutoUpdate
+
+    # Set source image
+    $vmConfig = Set-AzVMSourceImage -VM $vmConfig `
+        -PublisherName 'MicrosoftWindowsDesktop' `
+        -Offer 'Windows-10' `
+        -Skus 'win10-22h2-avd' `
+        -Version latest
+
+    # Add NIC
+    $vmConfig = Add-AzVMNetworkInterface -VM $vmConfig -Id $nic.Id -Primary
+
+    # Configure boot diagnostics
+    $vmConfig = Set-AzVMBootDiagnostic -VM $vmConfig -Enable
+
+    # Create the VM
+    Write-Host "Creating VM $VMName..." -ForegroundColor Green
+    New-AzVM -ResourceGroupName $ResourceGroup -Location $Location -VM $vmConfig
 }
-$pip = New-AzPublicIpAddress @pipConfig
 
-# Create NIC
-$nicConfig = @{
-    Name = "$VMName-nic"
-    ResourceGroupName = $ResourceGroup
-    Location = $Location
-    SubnetId = $vnet.Subnets[0].Id
-    PublicIpAddressId = $pip.Id
-    NetworkSecurityGroupId = $nsg.Id
-}
-$nic = New-AzNetworkInterface @nicConfig
-
-# Create VM Configuration
-$vmConfig = New-AzVMConfig -VMName $VMName -VMSize $VMSize
-$vmConfig = Set-AzVMOperatingSystem -VM $vmConfig -Windows -ComputerName $VMName `
-    -Credential (New-Object PSCredential ($AdminUsername, $AdminPassword)) `
-    -ProvisionVMAgent -EnableAutoUpdate
-
-$vmConfig = Set-AzVMSourceImage -VM $vmConfig `
-    -PublisherName 'MicrosoftWindowsDesktop' `
-    -Offer 'Windows-10' `
-    -Skus 'win10-22h2-avd' `
-    -Version latest
-
-$vmConfig = Add-AzVMNetworkInterface -VM $vmConfig -Id $nic.Id -Primary
-$vmConfig = Set-AzVMOSDisk -VM $vmConfig -Name "$VMName-OSDisk" -CreateOption FromImage -Windows
-
-# Create the VM
-Write-Host "Creating VM $VMName..." -ForegroundColor Green
-New-AzVM -ResourceGroupName $ResourceGroup -Location $Location -VM $vmConfig
+# Configure RDP Properties for AAD Join
+$Properties = "targetisaadjoined:i:1"
+Update-AzWvdHostPool -ResourceGroupName $ResourceGroup `
+    -Name $HostPoolName `
+    -CustomRdpProperty $Properties
 
 Write-Host "`nDeployment Complete!" -ForegroundColor Green
 Write-Host "`nHost Pool Registration Token: $($Token.Token)" -ForegroundColor Yellow
 Write-Host "`nImportant Next Steps:" -ForegroundColor Yellow
-Write-Host "1. Install the AVD Agent and Boot Loader on the VM" -ForegroundColor Yellow
-Write-Host "2. Register the VM with the Host Pool using the token" -ForegroundColor Yellow
-Write-Host "3. Configure user assignments in Microsoft Entra ID" -ForegroundColor Yellow
-Write-Host "4. Set up FSLogix profile containers if needed" -ForegroundColor Yellow
-Write-Host "5. Test connection at: https://client.wvd.microsoft.com/arm/webclient/index.html" -ForegroundColor Yellow
+Write-Host "1. Install the AVD Agent on each VM" -ForegroundColor Yellow
+Write-Host "2. Register each VM with the Host Pool using the token provided above" -ForegroundColor Yellow
+Write-Host "3. Test connection using: https://client.wvd.microsoft.com/arm/webclient/index.html" -ForegroundColor Yellow
+Write-Host "4. Update the local admin password in production" -ForegroundColor Yellow
+Write-Host "5. Configure any additional security settings as needed" -ForegroundColor Yellow
