@@ -1,6 +1,3 @@
-I'll help create a comprehensive script that includes the prerequisites and Azure AD/Microsoft Entra ID setup. Here's an updated version:
-
-```powershell
 # Variables for naming
 $SubscriptionId = (Get-AzContext).Subscription.Id
 $Location = "uksouth"
@@ -156,15 +153,3 @@ Write-Host "2. Register the VM with the Host Pool using the token" -ForegroundCo
 Write-Host "3. Configure user assignments in Microsoft Entra ID" -ForegroundColor Yellow
 Write-Host "4. Set up FSLogix profile containers if needed" -ForegroundColor Yellow
 Write-Host "5. Test connection at: https://client.wvd.microsoft.com/arm/webclient/index.html" -ForegroundColor Yellow
-
-```
-
-This updated script includes:
-1. Prerequisites check and installation
-2. Resource provider registration
-3. Network setup with proper security
-4. Complete AVD infrastructure deployment
-5. VM creation with proper AVD image
-6. Safety checks and logging
-
-Would you like me to explain any part of the script in detail or make any modifications?
