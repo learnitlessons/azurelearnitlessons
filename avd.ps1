@@ -1,14 +1,14 @@
 # Variables for the deployment
 $SubscriptionId = (Get-AzContext).Subscription.Id
-$ResourceGroup = "rg-avd-prod4"
+$ResourceGroup = "rg-avd-prod5"
 $Location = "uksouth"
-$WorkspaceName = "ws-avd-prod4"
-$HostPoolName = "hp-avd-prod4"
-$AppGroupName = "ag-desktop-prod4"
-$VNetName = "vnet-avd-prod4"
-$SubnetName = "snet-avd-prod4"
-$NSGName = "nsg-avd-prod4"
-$VMPrefix = "vm-avd4"
+$WorkspaceName = "ws-avd-prod5"
+$HostPoolName = "hp-avd-prod5"
+$AppGroupName = "ag-desktop-prod5"
+$VNetName = "vnet-avd-prod5"
+$SubnetName = "snet-avd-prod5"
+$NSGName = "nsg-avd-prod5"
+$VMPrefix = "vm-avd5"
 $UserName = "jdoe@learnitlessonscoutlook.onmicrosoft.com"
 
 # Network settings
@@ -86,7 +86,11 @@ $nsg = New-AzNetworkSecurityGroup -Name $NSGName -ResourceGroupName $ResourceGro
 Write-Host "Creating VNet and Subnet..." -ForegroundColor Green
 $subnet = New-AzVirtualNetworkSubnetConfig -Name $SubnetName -AddressPrefix $SubnetAddressPrefix -NetworkSecurityGroup $nsg
 $vnet = New-AzVirtualNetwork -ResourceGroupName $ResourceGroup -Location $Location `
-    -Name $VNetName -AddressPrefix $VNetAddressPrefix -Subnet $subnet
+    -Name $VNetName -AddressPrefix $VNetAddressPrefix -Subnet $subnet -Force
+
+# Get updated subnet reference
+$vnet = Get-AzVirtualNetwork -Name $VNetName -ResourceGroupName $ResourceGroup
+$subnet = Get-AzVirtualNetworkSubnetConfig -Name $SubnetName -VirtualNetwork $vnet
 
 # Create Host Pool
 Write-Host "Creating Host Pool..." -ForegroundColor Green
@@ -154,18 +158,20 @@ for ($i = 1; $i -le $VMCount; $i++) {
     }
     $pip = New-AzPublicIpAddress @pipConfig
 
-    # Create NIC with proper subnet reference
-    $nicConfig = @{
-        Name = "$VMName-nic"
-        ResourceGroupName = $ResourceGroup
-        Location = $Location
-        SubnetId = $subnet.Id
-        PublicIpAddressId = $pip.Id
-        NetworkSecurityGroupId = $nsg.Id
-    }
-    $nic = New-AzNetworkInterface @nicConfig
+    # Get updated subnet reference
+    $vnet = Get-AzVirtualNetwork -Name $VNetName -ResourceGroupName $ResourceGroup
+    $subnet = Get-AzVirtualNetworkSubnetConfig -Name $SubnetName -VirtualNetwork $vnet
 
-    # Create VM configuration
+    # Create NIC
+    $nicName = "$VMName-nic"
+    $nic = New-AzNetworkInterface -Name $nicName `
+        -ResourceGroupName $ResourceGroup `
+        -Location $Location `
+        -SubnetId $subnet.Id `
+        -PublicIpAddressId $pip.Id `
+        -NetworkSecurityGroupId $nsg.Id
+
+    # Create VM Config
     $vmConfig = New-AzVMConfig -VMName $VMName -VMSize $VMSize
 
     # Set OS settings
